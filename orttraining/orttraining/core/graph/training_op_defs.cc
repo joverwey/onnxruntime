@@ -1107,7 +1107,7 @@ Example 4:
         auto output_shape =
             ctx.getOutputType(0)->mutable_tensor_type()->mutable_shape();
 
-        std::vector<int64_t> axes_values = ParseData<int64_t>(axes_proto); 
+        std::vector<int64_t> axes_values = ParseData<int64_t>(axes_proto);
         std::vector<int64_t> axes;
         axes.reserve(axes_values.size());
         for (int64_t axis : axes_values) {
@@ -1128,7 +1128,7 @@ Example 4:
           }
         }
       });
-      
+
   ONNX_CONTRIB_OPERATOR_SCHEMA(TrainableDropout)
       .SetDomain(kOnnxDomain)
       .SinceVersion(9)
