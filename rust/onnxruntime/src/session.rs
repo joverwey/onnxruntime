@@ -288,6 +288,11 @@ impl Session {
                 value.get_mut_ptr()
             );
 
+            let _to_drop = Opaque {
+                ptr: shape_info,
+                release: self.api.ReleaseTensorTypeAndShapeInfo,
+            };
+
             let (shape, data_type) = get_shape_and_type(&self.api, shape_info)?;
 
             if shape.iter().any(|&s| s <= 0) {
@@ -316,7 +321,7 @@ impl Session {
 
 fn try_get_node(
     api: &OrtApi,
-    type_info: *const OrtTypeInfo,
+    type_info: *mut OrtTypeInfo,
     raw_name: *mut i8,
     allocator: *mut OrtAllocator,
 ) -> Result<Node, OnnxError> {
@@ -324,6 +329,12 @@ fn try_get_node(
     try_invoke!(api, CastTypeInfoToTensorInfo, type_info, &mut shape_info);
 
     let (shape, data_type) = get_shape_and_type(api, shape_info)?;
+
+    let _to_drop = Opaque {
+        ptr: type_info,
+        release: api.ReleaseTypeInfo,
+    };
+
     Ok(Node::new(
         data_type,
         raw_name as *mut c_void,

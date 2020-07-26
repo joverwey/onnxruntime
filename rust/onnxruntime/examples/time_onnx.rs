@@ -3,7 +3,6 @@ use std::{convert::TryInto, path::PathBuf, time::Instant};
 
 fn run(model_path: &str) -> Result<(), OnnxError> {
     let onnx = Onnx::new()?;
-    println!("created api");
 
     let mut session = onnx.create_session(model_path)?;
 
