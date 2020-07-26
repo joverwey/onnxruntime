@@ -1,0 +1,12 @@
+[package]
+name = "onnxruntime_sys"
+version = "0.1.0"
+links = "onnxruntime"
+build = "build.rs"
+edition = "2018"
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+bindgen = "0.54.1"
+
