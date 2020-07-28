@@ -39,7 +39,6 @@ fn run(model_path: &str) -> Result<(), OnnxError> {
 
 pub fn get_model_path(filename: &str) -> String {
     let mut buf: PathBuf = std::env::current_exe().unwrap();
-    while buf.pop() && !buf.ends_with("rust") {}
     while buf.pop() && !buf.ends_with("onnxruntime") {}
     buf.push("csharp");
     buf.push("testdata");

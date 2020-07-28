@@ -9,4 +9,5 @@ libc = "0.2"
 
 [build-dependencies]
 bindgen = "0.54.1"
+librarian = "0.2.2"
 
