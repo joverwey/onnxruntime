@@ -816,6 +816,7 @@ name = "onnxruntime"
 version = "0.1.0"
 dependencies = [
  "assert_approx_eq",
+ "lazy_static",
  "onnxruntime_sys",
  "thiserror",
  "widestring",

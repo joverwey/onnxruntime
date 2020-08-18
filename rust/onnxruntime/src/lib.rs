@@ -2,8 +2,7 @@
 //!
 //! ``` no_run
 //!# use onnxruntime::shaped_data::ShapedData;
-//!# use onnxruntime::Onnx;
-//!# let onnx = Onnx::new().unwrap();
+//!# use onnxruntime::session::Session;
 //!# use std::path::PathBuf;
 //!# use std::convert::TryInto;
 //!# pub fn get_model_path(filename: &str) -> String {
@@ -16,7 +15,7 @@
 //!let model_path = get_model_path("squeezenet.onnx");
 
 //! //We first create a session for a given model.
-//!let mut session = onnx.create_session(&model_path).unwrap();
+//!let mut session = Session::new(&model_path).unwrap();
 //!
 //! //Next we need to create input tensors. The caller of the model typically knows the shape
 //! //of this data but it can be verified by inspecting the *inputs()* of *session*.
@@ -54,10 +53,15 @@ macro_rules! try_get_fn {
 }
 
 macro_rules! invoke_fn {
+    ($api:expr, $function_name:ident) => {
+        let status = unsafe {$function_name()};
+        check_status($api, status)?
+    };
     ($api:expr, $function_name:ident $(, $param:expr)*) => {
         let status = unsafe {$function_name($($param),*)};
         check_status($api, status)?
     };
+
 }
 
 macro_rules! try_invoke {
@@ -114,16 +118,20 @@ macro_rules! try_create_opaque {
 //-------------------------------------------------------------------------------------------------
 pub mod node;
 pub mod session;
+pub mod session_options;
 pub mod shaped_data;
 pub mod tensor;
 pub mod tensor_element;
 
 use onnxruntime_sys::{OrtApi, OrtGetApiBase, OrtStatus};
 
-use session::{Session, SessionOptions};
+use lazy_static::lazy_static;
 use shaped_data::ShapedData;
 use std::ffi::CStr;
 use thiserror::Error;
+#[cfg(target_os = "windows")]
+use widestring::U16CString;
+
 //-------------------------------------------------------------------------------------------------
 // CONSTANTS
 //-------------------------------------------------------------------------------------------------
@@ -131,16 +139,6 @@ const ORT_API_VERSION: u32 = 2;
 
 //-------------------------------------------------------------------------------------------------
 // TYPES
-//-------------------------------------------------------------------------------------------------
-#[derive(Copy, Clone)]
-pub enum LoggingLevel {
-    Verbose,
-    Info,
-    Warning,
-    Error,
-    Fatal,
-}
-
 //-------------------------------------------------------------------------------------------------
 #[derive(Error, Debug)]
 pub enum OnnxError {
@@ -179,9 +177,26 @@ pub enum OnnxError {
 }
 
 //-------------------------------------------------------------------------------------------------
-/// The main API class used to create a session.
-pub struct Onnx {
-    api: OrtApi,
+
+lazy_static! {
+    pub static ref ONNX_NATIVE: OrtApi = {
+        unsafe {
+            let ort = OrtGetApiBase();
+            if ort.is_null() {
+                panic!("OrtGetApiBase is null");
+            } else {
+                let get_api = (*ort)
+                    .GetApi
+                    .expect("Missing GetApi function. Invalid DLL.");
+                let api = get_api(ORT_API_VERSION);
+                if api.is_null() {
+                    panic!("Incorrect API version. Are you using the correct DLL?");
+                } else {
+                    *api
+                }
+            }
+        }
+    };
 }
 
 struct Opaque<T> {
@@ -215,43 +230,15 @@ impl<'a, T> Drop for Opaque<T> {
 // TYPE IMPLEMENTATIONS
 //-------------------------------------------------------------------------------------------------
 
-impl Onnx {
-    //---------------------------------------------------------------------------------------------
-    // PUBLIC
-    //---------------------------------------------------------------------------------------------
-    /// Create a new instance of the ONNX API.
-    pub fn new() -> Result<Onnx, OnnxError> {
-        unsafe {
-            let ort = OrtGetApiBase();
-            if ort.is_null() {
-                Err(OnnxError::ApiFunctionError("OrtGetApiBase is null"))
-            } else {
-                let get_api = try_get_fn!(*ort, GetApi);
-                let api = get_api(ORT_API_VERSION);
-                if api.is_null() {
-                    Err(OnnxError::ApiFunctionError("Api"))
-                } else {
-                    let api = *api;
-                    Ok(Onnx { api })
-                }
-            }
-        }
-    }
+#[cfg(target_os = "windows")]
+fn get_path_from_str(model_path: &str) -> Result<U16CString, OnnxError> {
+    U16CString::from_str(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
+}
 
-    /// Create a session for the model at the given path
-    pub fn create_session(self, model_path: &str) -> Result<Session, OnnxError> {
-        let options = SessionOptions::new();
-        Session::new(self.api, model_path, &options)
-    }
-
-    /// Create a session for the model at the given path, applying the specified options.
-    pub fn create_session_with_options(
-        self,
-        model_path: &str,
-        options: &SessionOptions,
-    ) -> Result<Session, OnnxError> {
-        Session::new(self.api, model_path, &options)
-    }
+// And this function only gets compiled if the target OS is *not* windows
+#[cfg(not(target_os = "windows"))]
+fn get_path_from_str(model_path: &str) -> Result<CString, OnnxError> {
+    CString::new(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
 }
 
 //---------------------------------------------------------------------------------------------
@@ -290,7 +277,7 @@ pub(crate) mod tests {
         let mut buf: PathBuf = std::env::current_exe().unwrap();
         while buf.pop() && !buf.ends_with("onnxruntime") {}
         buf.push("csharp");
-        buf.push("testdata");        
+        buf.push("testdata");
         buf.push(filename);
         buf.to_str().unwrap().into()
     }

@@ -1,10 +1,9 @@
-use onnxruntime::{shaped_data::ShapedData, Onnx, OnnxError};
+use onnxruntime::session::Session;
+use onnxruntime::{shaped_data::ShapedData, OnnxError};
 use std::{convert::TryInto, path::PathBuf, time::Instant};
 
 fn run(model_path: &str) -> Result<(), OnnxError> {
-    let onnx = Onnx::new()?;
-
-    let mut session = onnx.create_session(model_path)?;
+    let mut session = Session::new(model_path)?;
 
     let shape = vec![1, 3, 224, 224];
     let input_tensor_size = shape.iter().product();

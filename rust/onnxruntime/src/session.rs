@@ -16,42 +16,22 @@ macro_rules! try_get_node_info {
     }};
 }
 use crate::{
-    check_status, node::Node, tensor::Tensor, tensor_element::TensorElement, LoggingLevel,
-    OnnxError, Opaque, ShapedData,
+    check_status, get_path_from_str, node::Node, tensor::Tensor, tensor_element::TensorElement,
+    OnnxError, Opaque, ShapedData, ONNX_NATIVE,
 };
 use onnxruntime_sys::{
-    GraphOptimizationLevel, ONNXTensorElementDataType, OrtAllocator, OrtApi, OrtEnv,
-    OrtLoggingLevel, OrtRunOptions, OrtSession, OrtSessionOptions,
-    OrtSessionOptionsAppendExecutionProvider_CUDA, OrtTensorTypeAndShapeInfo, OrtTypeInfo,
-    OrtValue,
+    ONNXTensorElementDataType, OrtAllocator, OrtApi, OrtEnv, OrtLoggingLevel, OrtRunOptions,
+    OrtSession, OrtTensorTypeAndShapeInfo, OrtTypeInfo, OrtValue,
 };
 use std::{
     ffi::{c_void, CString},
     ptr,
 };
 
-#[cfg(target_os = "windows")]
-use widestring::U16CString;
-
-pub struct SessionOptions {
-    /// The GPU Device Id if any.
-    /// This is typically 0 if there is only one GPU on the system.
-    /// Note that this requires the 'gpu' feature to be enabled.
-    pub gpu_device_id: Option<usize>,
-
-    /// The logging level
-    pub log_level: LoggingLevel,
-
-    /// The intra op number of threads.
-    pub intra_op_num_threads: Option<usize>,
-
-    ///The inter op number of threads.
-    pub inter_op_num_threads: Option<usize>,
-}
+use crate::session_options::SessionOptions;
 
 /// An ONNX session for a given model. Create tensors that match the input nodes and pass these to the *run* method.
 pub struct Session {
-    api: OrtApi,
     // The environment has to stay alive for the duration of the session as it is used for internal logging.
     #[allow(dead_code)]
     env: Opaque<OrtEnv>,
@@ -65,101 +45,27 @@ pub struct Session {
     run_options: Opaque<OrtRunOptions>,
 }
 
-impl SessionOptions {
-    pub fn new() -> SessionOptions {
-        SessionOptions {
-            log_level: LoggingLevel::Warning,
-            inter_op_num_threads: None,
-            intra_op_num_threads: None,
-            gpu_device_id: None,
-        }
-    }
-
-    pub fn with_intra_op_num_treads(mut self, number_of_threads: usize) -> Self {
-        self.intra_op_num_threads = Some(number_of_threads);
-        self
-    }
-
-    pub fn with_inter_op_num_treads(mut self, number_of_threads: usize) -> Self {
-        self.inter_op_num_threads = Some(number_of_threads);
-        self
-    }
-}
-
-impl<'a> Opaque<OrtSessionOptions> {
-    //---------------------------------------------------------------------------------------------
-    /// Create SessionOptions that allows control of the number of threads used
-    /// and the kind of optimizations that are applied to the computation graph.
-    pub(crate) fn from_options(
-        api: &'a OrtApi,
-        options: &SessionOptions,
-    ) -> Result<Opaque<OrtSessionOptions>, OnnxError> {
-        let mut onnx_options = try_create_opaque!(
-            api,
-            CreateSessionOptions,
-            OrtSessionOptions,
-            api.ReleaseSessionOptions
-        );
-        let ptr = onnx_options.get_mut_ptr();
-        if let Some(inter_op_num_threads) = options.inter_op_num_threads {
-            try_invoke!(api, SetInterOpNumThreads, ptr, inter_op_num_threads as i32);
-        }
-
-        if let Some(intra_op_num_threads) = options.intra_op_num_threads {
-            try_invoke!(api, SetIntraOpNumThreads, ptr, intra_op_num_threads as i32);
-        }
-
-        try_invoke!(
-            api,
-            SetSessionGraphOptimizationLevel,
-            ptr,
-            GraphOptimizationLevel::ORT_ENABLE_ALL
-        );
-
-        if cfg!(feature = "gpu") {
-            let gpu_device_id = options.gpu_device_id.unwrap_or(0) as i32;
-
-            invoke_fn!(
-                &api,
-                OrtSessionOptionsAppendExecutionProvider_CUDA,
-                ptr,
-                gpu_device_id
-            );
-        }
-
-        Ok(onnx_options)
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn get_model_path_from_str(model_path: &str) -> Result<U16CString, OnnxError> {
-    U16CString::from_str(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
-}
-
-// And this function only gets compiled if the target OS is *not* windows
-#[cfg(not(target_os = "windows"))]
-fn get_model_path_from_str(model_path: &str) -> Result<CString, OnnxError> {
-    CString::new(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
-}
-
 impl Session {
+    pub fn new(model_path: &str) -> Result<Session, OnnxError> {
+        let options = SessionOptions::new()?;
+        Self::from_options(model_path, &options)
+    }
     //---------------------------------------------------------------------------------------------
     /// Create a new session for the model at the given path.
-    pub(crate) fn new(
-        api: OrtApi,
+    pub(crate) fn from_options(
         model_path: &str,
         options: &SessionOptions,
     ) -> Result<Session, OnnxError> {
-        let env = create_env(&api, options.log_level)?;
+        let env = create_env(&ONNX_NATIVE, options.log_severity_level())?;
 
-        let model_path = get_model_path_from_str(model_path)?;
+        let model_path = get_path_from_str(model_path)?;
 
-        let options = Opaque::from_options(&api, options)?;
+        let options = Opaque::from_options(&ONNX_NATIVE, options)?;
         let onnx_session = try_create_opaque!(
-            &api,
+            &ONNX_NATIVE,
             CreateSession,
             OrtSession,
-            api.ReleaseSession,
+            ONNX_NATIVE.ReleaseSession,
             env.get_ptr(),
             model_path.as_ptr(),
             options.get_ptr()
@@ -167,18 +73,28 @@ impl Session {
 
         let session = onnx_session.get_ptr();
         let mut input_count = 0;
-        try_invoke!(&api, SessionGetInputCount, session, &mut input_count);
+        try_invoke!(
+            &ONNX_NATIVE,
+            SessionGetInputCount,
+            session,
+            &mut input_count
+        );
         let mut output_count = 0;
-        try_invoke!(&api, SessionGetOutputCount, session, &mut output_count);
+        try_invoke!(
+            &ONNX_NATIVE,
+            SessionGetOutputCount,
+            session,
+            &mut output_count
+        );
 
-        let allocator = try_create!(&api, GetAllocatorWithDefaultOptions, OrtAllocator);
+        let allocator = try_create!(&ONNX_NATIVE, GetAllocatorWithDefaultOptions, OrtAllocator);
 
         let mut inputs: Vec<Node> = Vec::new();
         let mut outputs: Vec<Node> = Vec::new();
 
         for i in 0..input_count as usize {
             inputs.push(try_get_node_info!(
-                &api,
+                &ONNX_NATIVE,
                 SessionGetInputName,
                 SessionGetInputTypeInfo,
                 session,
@@ -189,7 +105,7 @@ impl Session {
 
         for i in 0..output_count as usize {
             outputs.push(try_get_node_info!(
-                &api,
+                &ONNX_NATIVE,
                 SessionGetOutputName,
                 SessionGetOutputTypeInfo,
                 session,
@@ -198,11 +114,14 @@ impl Session {
             )?);
         }
 
-        let run_options =
-            try_create_opaque!(&api, CreateRunOptions, OrtRunOptions, api.ReleaseRunOptions);
+        let run_options = try_create_opaque!(
+            &ONNX_NATIVE,
+            CreateRunOptions,
+            OrtRunOptions,
+            ONNX_NATIVE.ReleaseRunOptions
+        );
 
         Ok(Session {
-            api,
             env,
             inputs,
             allocator,
@@ -233,7 +152,7 @@ impl Session {
         let mut output_pointers: Vec<*mut OrtValue> = vec![std::ptr::null_mut(); output_count];
 
         try_invoke!(
-            &self.api,
+            &ONNX_NATIVE,
             Run,
             self.onnx_session.get_mut_ptr(),
             self.run_options.get_ptr(),
@@ -248,7 +167,7 @@ impl Session {
         // First wrap values so we are sure they will be dropped if anything goes wrong below.
         let values: Vec<Opaque<OrtValue>> = output_pointers
             .into_iter()
-            .map(|ptr| Opaque::new(ptr, self.api.ReleaseValue))
+            .map(|ptr| Opaque::new(ptr, ONNX_NATIVE.ReleaseValue))
             .collect();
 
         let x = values
@@ -268,10 +187,10 @@ impl Session {
         let element_type = T::get_type();
         let shape_i64: Vec<i64> = shape.iter().map(|&v| v as i64).collect();
         let mut value = try_create_opaque!(
-            &self.api,
+            &ONNX_NATIVE,
             CreateTensorAsOrtValue,
             OrtValue,
-            self.api.ReleaseValue,
+            ONNX_NATIVE.ReleaseValue,
             self.allocator,
             shape_i64.as_ptr() as *const i64,
             shape.len() as u64,
@@ -279,7 +198,7 @@ impl Session {
         );
 
         let data_ptr = try_create!(
-            &self.api,
+            &ONNX_NATIVE,
             GetTensorMutableData,
             std::os::raw::c_void,
             value.get_mut_ptr()
@@ -301,7 +220,7 @@ impl Session {
     fn is_tensor(&self, ptr: *const OrtValue) -> Result<bool, OnnxError> {
         let mut is_tensor_int = 0;
         try_invoke!(
-            &self.api,
+            &ONNX_NATIVE,
             IsTensor,
             ptr,
             &mut is_tensor_int as *mut std::os::raw::c_int
@@ -313,21 +232,21 @@ impl Session {
     fn get_tensor_from_value(&self, mut value: Opaque<OrtValue>) -> Result<Tensor, OnnxError> {
         if self.is_tensor(value.get_ptr())? {
             let data_ptr = try_create!(
-                &self.api,
+                &ONNX_NATIVE,
                 GetTensorMutableData,
                 std::os::raw::c_void,
                 value.get_mut_ptr()
             );
 
             let shape_info = try_create_opaque!(
-                &self.api,
+                &ONNX_NATIVE,
                 GetTensorTypeAndShape,
                 OrtTensorTypeAndShapeInfo,
-                self.api.ReleaseTensorTypeAndShapeInfo,
+                ONNX_NATIVE.ReleaseTensorTypeAndShapeInfo,
                 value.get_mut_ptr()
             );
 
-            let (shape, data_type) = get_shape_and_type(&self.api, shape_info.get_ptr())?;
+            let (shape, data_type) = get_shape_and_type(&ONNX_NATIVE, shape_info.get_ptr())?;
 
             if shape.iter().any(|&s| s <= 0) {
                 return Err(OnnxError::InvalidTensorShape(shape));
@@ -392,15 +311,7 @@ fn get_shape_and_type(
     Ok((shape, data_type))
 }
 
-fn create_env(api: &OrtApi, log_level: LoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
-    let log_level = match log_level {
-        LoggingLevel::Verbose => OrtLoggingLevel::ORT_LOGGING_LEVEL_VERBOSE,
-        LoggingLevel::Info => OrtLoggingLevel::ORT_LOGGING_LEVEL_INFO,
-        LoggingLevel::Warning => OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING,
-        LoggingLevel::Error => OrtLoggingLevel::ORT_LOGGING_LEVEL_ERROR,
-        LoggingLevel::Fatal => OrtLoggingLevel::ORT_LOGGING_LEVEL_FATAL,
-    };
-
+fn create_env(api: &OrtApi, log_level: OrtLoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
     let c_str = CString::new("onnx_runtime").unwrap(); // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
     let env = try_create_opaque!(
         api,
@@ -416,16 +327,16 @@ fn create_env(api: &OrtApi, log_level: LoggingLevel) -> Result<Opaque<OrtEnv>, O
 #[cfg(test)]
 mod tests {
 
-    use crate::{shaped_data::ShapedData, tests::get_model_path, Onnx, OnnxError};
+    use crate::session::Session;
+    use crate::{shaped_data::ShapedData, tests::get_model_path, OnnxError};
     use assert_approx_eq::assert_approx_eq;
     use std::convert::TryInto;
 
     #[test]
     fn can_run_squeezenet_model() -> Result<(), OnnxError> {
-        let onnx = Onnx::new()?;
         let model_path = get_model_path("squeezenet.onnx");
 
-        let mut session = onnx.create_session(&model_path)?;
+        let mut session = Session::new(&model_path)?;
 
         let shape = vec![1, 3, 224, 224];
         let input_tensor_size = shape.iter().product();
