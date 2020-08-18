@@ -1,9 +1,18 @@
 use onnxruntime::session::Session;
+use onnxruntime::session_options::SessionOptions;
 use onnxruntime::{shaped_data::ShapedData, OnnxError};
 use std::{convert::TryInto, path::PathBuf, time::Instant};
 
 fn run(model_path: &str) -> Result<(), OnnxError> {
-    let mut session = Session::new(model_path)?;
+    let options =
+        if cfg!(feature = "gpu") {
+            SessionOptions::with_cuda_deafult()?
+        }
+        else {
+            SessionOptions::new()?
+        };
+
+    let mut session = Session::from_options(model_path, &options)?;
 
     let shape = vec![1, 3, 224, 224];
     let input_tensor_size = shape.iter().product();

@@ -110,6 +110,7 @@ fn main() {
         .whitelist_type("OrtApi")
         .whitelist_function("OrtGetApiBase")
         .whitelist_function("OrtSessionOptionsAppendExecutionProvider_CUDA")
+        .whitelist_function("OrtSessionOptionsAppendExecutionProvider_CPU")
         .rustified_enum(".*")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .generate()

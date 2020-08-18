@@ -45,21 +45,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// Create a new session for the model at the given path.
     pub fn new(model_path: &str) -> Result<Session, OnnxError> {
         let options = SessionOptions::new()?;
         Self::from_options(model_path, &options)
     }
     //---------------------------------------------------------------------------------------------
-    /// Create a new session for the model at the given path.
-    pub(crate) fn from_options(
-        model_path: &str,
-        options: &SessionOptions,
-    ) -> Result<Session, OnnxError> {
+    /// Create a new session for the model at the given path using the specified options.
+    pub fn from_options(model_path: &str, options: &SessionOptions) -> Result<Session, OnnxError> {
         let env = create_env(options.log_severity_level())?;
 
         let model_path = get_path_from_str(model_path)?;
 
-        let options = Opaque::from_options(options)?;
         let onnx_session = try_create_opaque!(
             CreateSession,
             OrtSession,

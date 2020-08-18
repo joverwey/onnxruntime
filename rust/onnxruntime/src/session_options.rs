@@ -1,10 +1,14 @@
 use crate::{check_status, get_path_from_str, OnnxError, Opaque, ONNX_NATIVE};
 use onnxruntime_sys::{
     ExecutionMode, GraphOptimizationLevel, OrtLoggingLevel, OrtSessionOptions,
-    OrtSessionOptionsAppendExecutionProvider_CUDA,
+    OrtSessionOptionsAppendExecutionProvider_CPU, OrtSessionOptionsAppendExecutionProvider_CUDA,
 };
 use std::ffi::CString;
 
+#[cfg(target_os = "windows")]
+use libloading::Library;
+
+/// Holds the options for creating an InferenceSession
 pub struct SessionOptions {
     native_options: Opaque<OrtSessionOptions>,
 
@@ -15,11 +19,6 @@ pub struct SessionOptions {
     profile_output_path_prefix: String,
     log_id: String,
     execution_mode: ExecutionMode,
-
-    /// The GPU Device Id if any.
-    /// This is typically 0 if there is only one GPU on the system.
-    /// Note that this requires the 'gpu' feature to be enabled.
-    gpu_device_id: usize,
 
     /// Log Verbosity Level for the session logs. Default = 0. Valid values are >=0.
     /// This takes into effect only when the LogSeverityLevel is set to ORT_LOGGING_LEVEL_VERBOSE.
@@ -42,6 +41,7 @@ pub struct SessionOptions {
 }
 
 impl SessionOptions {
+    /// Constructs an empty SessionOptions with default options
     pub fn new() -> Result<SessionOptions, OnnxError> {
         let native_options = try_create_opaque!(
             CreateSessionOptions,
@@ -55,7 +55,6 @@ impl SessionOptions {
             log_verbosity_level: 0,
             inter_op_num_threads: 0,
             intra_op_num_threads: 0,
-            gpu_device_id: 0,
             enable_memory_pattern: true,
             enable_profiling: false,
             is_cpu_mem_arena_enabled: true,
@@ -66,7 +65,34 @@ impl SessionOptions {
         })
     }
 
-    fn get_native_ptr(&mut self) -> *mut OrtSessionOptions {
+    /// A helper method to construct a SessionOptions object for CUDA execution.
+    /// Use only if CUDA is installed and you have the onnxruntime package specific to this Execution Provider.
+    /// Returns a SessionsOptions() object configured for execution on deviceId or an error.
+    pub fn with_cuda(device_id: usize) -> Result<SessionOptions, OnnxError> {
+        let mut options = SessionOptions::new()?;
+
+        options.append_execution_provider_cuda(device_id)?;
+
+        invoke_fn!(
+            OrtSessionOptionsAppendExecutionProvider_CPU,
+            options.get_ptr_mut(),
+            1
+        );
+        Ok(options)
+    }
+
+    /// A helper method to construct a SessionOptions object for CUDA execution.
+    /// Use only if CUDA is installed and you have the onnxruntime package specific to this Execution Provider.
+    /// Returns a SessionsOptions() object configured for execution on deviceId or an error.
+    pub fn with_cuda_deafult() -> Result<SessionOptions, OnnxError> {
+        Self::with_cuda(0)
+    }
+
+    pub(crate) fn get_ptr(&self) -> *const OrtSessionOptions {
+        self.native_options.get_ptr()
+    }
+
+    pub(crate) fn get_ptr_mut(&mut self) -> *mut OrtSessionOptions {
         self.native_options.get_mut_ptr()
     }
 
@@ -93,9 +119,7 @@ impl SessionOptions {
     pub fn profiling_enabled(&self) -> bool {
         self.enable_profiling
     }
-    pub fn gpu_device_id(&self) -> usize {
-        self.gpu_device_id
-    }
+
     pub fn log_verbosity_level(&self) -> usize {
         self.log_verbosity_level
     }
@@ -118,7 +142,7 @@ impl SessionOptions {
     ) -> Result<(), OnnxError> {
         try_invoke!(
             SetSessionLogSeverityLevel,
-            self.get_native_ptr(),
+            self.get_ptr_mut(),
             log_severity_level as i32
         );
         self.log_severity_level = log_severity_level;
@@ -128,7 +152,7 @@ impl SessionOptions {
     pub fn set_log_verbosity_level(&mut self, log_verbosity_level: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetSessionLogVerbosityLevel,
-            self.get_native_ptr(),
+            self.get_ptr_mut(),
             log_verbosity_level as i32
         );
         self.log_verbosity_level = log_verbosity_level;
@@ -138,7 +162,7 @@ impl SessionOptions {
     pub fn set_intra_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetInterOpNumThreads,
-            self.get_native_ptr(),
+            self.get_ptr_mut(),
             number_of_threads as i32
         );
         self.intra_op_num_threads = number_of_threads;
@@ -148,7 +172,7 @@ impl SessionOptions {
     pub fn set_inter_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetInterOpNumThreads,
-            self.get_native_ptr(),
+            self.get_ptr_mut(),
             number_of_threads as i32
         );
         self.inter_op_num_threads = number_of_threads;
@@ -156,48 +180,44 @@ impl SessionOptions {
     }
 
     pub fn set_execution_mode(&mut self, execution_mode: ExecutionMode) -> Result<(), OnnxError> {
-        try_invoke!(
-            SetSessionExecutionMode,
-            self.get_native_ptr(),
-            execution_mode
-        );
+        try_invoke!(SetSessionExecutionMode, self.get_ptr_mut(), execution_mode);
         self.execution_mode = execution_mode;
         Ok(())
     }
 
     pub fn enable_memory_pattern(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(EnableMemPattern, self.get_native_ptr());
+        try_invoke!(EnableMemPattern, self.get_ptr_mut());
         self.enable_memory_pattern = true;
         Ok(())
     }
 
     pub fn disable_memory_pattern(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(EnableMemPattern, self.get_native_ptr());
+        try_invoke!(EnableMemPattern, self.get_ptr_mut());
         self.enable_memory_pattern = false;
         Ok(())
     }
 
     pub fn enable_profiling(&mut self) -> Result<(), OnnxError> {
         let path_prefix = get_path_from_str(&self.profile_output_path_prefix)?;
-        try_invoke!(EnableProfiling, self.get_native_ptr(), path_prefix.as_ptr());
+        try_invoke!(EnableProfiling, self.get_ptr_mut(), path_prefix.as_ptr());
         self.enable_profiling = true;
         Ok(())
     }
 
     pub fn disable_profiling(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(DisableProfiling, self.get_native_ptr());
+        try_invoke!(DisableProfiling, self.get_ptr_mut());
         self.enable_profiling = false;
         Ok(())
     }
 
     pub fn enable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(EnableCpuMemArena, self.get_native_ptr());
+        try_invoke!(EnableCpuMemArena, self.get_ptr_mut());
         self.is_cpu_mem_arena_enabled = true;
         Ok(())
     }
 
     pub fn disable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(DisableCpuMemArena, self.get_native_ptr());
+        try_invoke!(DisableCpuMemArena, self.get_ptr_mut());
         self.is_cpu_mem_arena_enabled = false;
         Ok(())
     }
@@ -208,7 +228,7 @@ impl SessionOptions {
     ) -> Result<(), OnnxError> {
         try_invoke!(
             SetSessionGraphOptimizationLevel,
-            self.get_native_ptr(),
+            self.get_ptr_mut(),
             graph_optimization_level
         );
         self.graph_optimization_level = graph_optimization_level;
@@ -222,51 +242,57 @@ impl SessionOptions {
         self.profile_output_path_prefix = profile_output_path_prefix.into();
     }
 
+    /// Use only if you have the onnxruntime package specific to this Execution Provider.
+    pub fn append_execution_provider_cuda(&mut self, device_id: usize) -> Result<(), OnnxError> {
+        if cfg!(feature = "gpu") {
+            check_cuda_execution_provider_dlls()?;
+            invoke_fn!(
+                OrtSessionOptionsAppendExecutionProvider_CUDA,
+                self.get_ptr_mut(),
+                device_id as i32
+            );
+        } else {
+            return Err(OnnxError::CudaNotSupported);
+        }
+
+        Ok(())
+    }
+
+    pub fn append_execution_provider_cpu(&mut self, use_arena: usize) -> Result<(), OnnxError> {
+        invoke_fn!(
+            OrtSessionOptionsAppendExecutionProvider_CPU,
+            self.get_ptr_mut(),
+            use_arena as i32
+        );
+        Ok(())
+    }
+
     pub fn set_log_id<S: Into<String>>(&mut self, log_id: S) -> Result<(), OnnxError> {
         self.log_id = log_id.into();
 
         let c_str = CString::new(self.log_id.clone()).unwrap(); // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
 
-        try_invoke!(SetSessionLogId, self.get_native_ptr(), c_str.into_raw());
+        try_invoke!(SetSessionLogId, self.get_ptr_mut(), c_str.into_raw());
 
         Ok(())
     }
 }
 
-impl<'a> Opaque<OrtSessionOptions> {
-    //---------------------------------------------------------------------------------------------
-    /// Create SessionOptions that allows control of the number of threads used
-    /// and the kind of optimizations that are applied to the computation graph.
-    pub(crate) fn from_options(
-        options: &SessionOptions,
-    ) -> Result<Opaque<OrtSessionOptions>, OnnxError> {
-        let mut onnx_options = try_create_opaque!(
-            CreateSessionOptions,
-            OrtSessionOptions,
-            ReleaseSessionOptions
-        );
-        let ptr = onnx_options.get_mut_ptr();
+static CUDA_DELAY_LOADED_LIBS: &'static [&'static str] =
+    &["cublas64_10.dll", "cudnn64_7.dll", "curand64_10.dll"];
 
-        try_invoke!(
-            SetSessionGraphOptimizationLevel,
-            ptr,
-            GraphOptimizationLevel::ORT_ENABLE_ALL
-        );
-
-        if cfg!(feature = "gpu") {
-            let gpu_device_id = options.gpu_device_id as i32;
-
-            invoke_fn!(
-                OrtSessionOptionsAppendExecutionProvider_CUDA,
-                ptr,
-                gpu_device_id
-            );
+fn check_cuda_execution_provider_dlls() -> Result<(), OnnxError> {
+    if cfg!(target_os = "windows") {
+        for dll in CUDA_DELAY_LOADED_LIBS {
+            match Library::new(dll) {
+                Ok(_) => (),
+                Err(_) => return Err(OnnxError::CudaNotFound),
+            };
         }
-
-        Ok(onnx_options)
     }
-}
 
+    Ok(())
+}
 //==================================================================================================
 // TESTS
 //==================================================================================================
@@ -329,30 +355,10 @@ mod tests {
             opt.graph_optimization_level()
         );
 
-        // Assert.Throws<OnnxRuntimeException>(() => { opt.GraphOptimizationLevel = (GraphOptimizationLevel)10; });
-        //
-        // opt.AppendExecutionProvider_CPU(1);
-        // #if USE_DNNL
-        // opt.AppendExecutionProvider_Dnnl(0);
-        // #endif
-        // #if USE_CUDA
-        // opt.AppendExecutionProvider_CUDA(0);
-        // #endif
-        // #if USE_NGRAPH
-        // opt.AppendExecutionProvider_NGraph("CPU");  //TODO: this API should be refined
-        // #endif
-        // #if USE_OPENVINO
-        // opt.AppendExecutionProvider_OpenVINO();
-        // #endif
-        // #if USE_TENSORRT
-        // opt.AppendExecutionProvider_Tensorrt(0);
-        // #endif
-        // #if USE_MIGRAPHX
-        // opt.AppendExecutionProvider_MIGraphX(0);
-        // #endif
-        // #if USE_NNAPI
-        // opt.AppendExecutionProvider_Nnapi();
-        // #endif
+        opt.append_execution_provider_cpu(1)?;
+        if cfg!(feature = "gpu") {
+            opt.append_execution_provider_cuda(0)?;
+        }
 
         Ok(())
     }

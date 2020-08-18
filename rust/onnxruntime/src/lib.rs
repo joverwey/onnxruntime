@@ -175,6 +175,12 @@ pub enum OnnxError {
 
     #[error("Could not create tensor with shape {0:?}.")]
     InvalidTensorShape(Vec<i64>),
+
+    #[error("CUDA was requested but the required version of CUDA and CUDNN could not be found in the system path. See developer instructions for details.")]
+    CudaNotFound,
+
+    #[error("CUDA was requested but this version of ONNX does not support CUDA. Use the 'gpu' feature flag.")]
+    CudaNotSupported,
 }
 
 //-------------------------------------------------------------------------------------------------
