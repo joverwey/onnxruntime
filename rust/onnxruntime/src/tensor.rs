@@ -1,11 +1,11 @@
-use crate::{tensor_element::TensorElement, OnnxError, Opaque};
+use crate::{tensor_element::TensorElement, OnnxError, OnnxObject};
 use onnxruntime_sys::{ONNXTensorElementDataType, OrtValue};
 use std::{ffi::c_void, ptr};
 
 /// An ONNX Tensor
 pub struct Tensor {
     data_ptr: *mut c_void,
-    value: Opaque<OrtValue>,
+    value: OnnxObject<OrtValue>,
     pub(crate) element_type: ONNXTensorElementDataType,
     shape: Vec<usize>,
 }
@@ -13,7 +13,7 @@ pub struct Tensor {
 impl Tensor {
     pub(crate) fn new(
         data_ptr: *mut c_void,
-        value: Opaque<OrtValue>,
+        value: OnnxObject<OrtValue>,
         element_type: ONNXTensorElementDataType,
         shape: Vec<usize>,
     ) -> Tensor {
@@ -35,7 +35,7 @@ impl Tensor {
         &self.shape
     }
 
-    pub(crate) fn value(&self) -> &Opaque<OrtValue> {
+    pub(crate) fn value(&self) -> &OnnxObject<OrtValue> {
         &self.value
     }
 

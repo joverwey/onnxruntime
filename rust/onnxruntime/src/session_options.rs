@@ -1,4 +1,4 @@
-use crate::{check_status, get_path_from_str, OnnxError, Opaque, ONNX_NATIVE};
+use crate::{check_status, get_path_from_str, OnnxError, OnnxObject, ONNX_NATIVE};
 use onnxruntime_sys::{
     ExecutionMode, GraphOptimizationLevel, OrtLoggingLevel, OrtSessionOptions,
     OrtSessionOptionsAppendExecutionProvider_CPU, OrtSessionOptionsAppendExecutionProvider_CUDA,
@@ -10,33 +10,33 @@ use libloading::Library;
 
 /// Holds the options for creating an InferenceSession
 pub struct SessionOptions {
-    native_options: Opaque<OrtSessionOptions>,
-
+    native_options: OnnxObject<OrtSessionOptions>,
     /// Enables the use of the memory allocation patterns in the first Run() call for subsequent runs. Default = true.
     enable_memory_pattern: bool,
+    /// Enables profiling of InferenceSession.Run() calls. Default is false
     enable_profiling: bool,
+    /// Enables Arena allocator for the CPU memory allocations. Default is true.
     is_cpu_mem_arena_enabled: bool,
+    /// Path prefix to use for output of profiling data
     profile_output_path_prefix: String,
+    /// Log Id to be used for the session. Default is empty string.
     log_id: String,
+    /// Sets the execution mode for the session. Default is set to ORT_SEQUENTIAL.
+    /// See [ONNX_Runtime_Perf_Tuning.md] for more details.
     execution_mode: ExecutionMode,
-
     /// Log Verbosity Level for the session logs. Default = 0. Valid values are >=0.
     /// This takes into effect only when the LogSeverityLevel is set to ORT_LOGGING_LEVEL_VERBOSE.
     log_verbosity_level: usize,
-
-    /// The logging level
+    /// Log Severity Level for the session logs. Default = ORT_LOGGING_LEVEL_WARNING
     log_severity_level: OrtLoggingLevel,
-
-    /// Sets the number of threads used to parallelize the execution within nodes
+    /// The number of threads used to parallelize the execution within nodes
     /// A value of None or 0 means ORT will pick a default
     intra_op_num_threads: usize,
-
-    // Sets the number of threads used to parallelize the execution of the graph (across nodes)
-    // If sequential execution is enabled this value is ignored
-    // A value of None or 0 means ORT will pick a default
+    /// The number of threads used to parallelize the execution of the graph (across nodes)
+    /// If sequential execution is enabled this value is ignored
+    /// A value of None or 0 means ORT will pick a default
     inter_op_num_threads: usize,
-
-    /// Graph optimization level
+    /// The graph optimization level for the session. Default is set to ORT_ENABLE_ALL.
     graph_optimization_level: GraphOptimizationLevel,
 }
 
@@ -96,46 +96,65 @@ impl SessionOptions {
         self.native_options.get_mut_ptr()
     }
 
+    /// The execution mode for the session.
     pub fn execution_mode(&self) -> ExecutionMode {
         self.execution_mode
     }
 
+    /// Is Arena allocator enabled for the CPU memory allocations.
     pub fn cpu_mem_arena_enabled(&self) -> bool {
         self.is_cpu_mem_arena_enabled
     }
 
+    /// Whether memory allocation patterns are enabled
     pub fn memory_pattern_enabled(&self) -> bool {
         self.enable_memory_pattern
     }
 
+    /// Path prefix to use for output of profiling data
     pub fn profile_output_path_prefix(&self) -> &str {
         &self.profile_output_path_prefix
     }
 
+    /// Log Id to be used for the session.
     pub fn log_id(&self) -> &str {
         &self.log_id
     }
 
+    /// Is profiling enabled for InferenceSession.Run() calls.
     pub fn profiling_enabled(&self) -> bool {
         self.enable_profiling
     }
 
+    /// Log Verbosity Level for the session logs. Default = 0. Valid values are >=0.
     pub fn log_verbosity_level(&self) -> usize {
         self.log_verbosity_level
     }
+
+    /// Log Severity Level for the session logs. Default = ORT_LOGGING_LEVEL_WARNING
     pub fn log_severity_level(&self) -> OrtLoggingLevel {
         self.log_severity_level
     }
+
+    /// The number of threads used to parallelize the execution within nodes
+    /// A value of None or 0 means ORT will pick a default
     pub fn intra_op_num_threads(&self) -> usize {
         self.intra_op_num_threads
     }
+
+    /// The number of threads used to parallelize the execution of the graph (across nodes)
+    /// If sequential execution is enabled this value is ignored
+    /// A value of None or 0 means ORT will pick a default
     pub fn inter_op_num_threads(&self) -> usize {
         self.inter_op_num_threads
     }
+
+    /// The graph optimization level for the session. Default is set to ORT_ENABLE_ALL.
     pub fn graph_optimization_level(&self) -> GraphOptimizationLevel {
         self.graph_optimization_level
     }
 
+    /// Set Log Severity Level for the session logs. Default = ORT_LOGGING_LEVEL_WARNING
     pub fn set_log_severity_level(
         &mut self,
         log_severity_level: OrtLoggingLevel,
@@ -149,6 +168,8 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Sets the Log Verbosity Level for the session logs. Default = 0. Valid values are >=0.
+    /// This takes into effect only when the LogSeverityLevel is set to ORT_LOGGING_LEVEL_VERBOSE.
     pub fn set_log_verbosity_level(&mut self, log_verbosity_level: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetSessionLogVerbosityLevel,
@@ -159,6 +180,8 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Sets the number of threads used to parallelize the execution within nodes
+    /// A value of None or 0 means ORT will pick a default
     pub fn set_intra_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetInterOpNumThreads,
@@ -169,6 +192,9 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Sets the number of threads used to parallelize the execution of the graph (across nodes)
+    /// If sequential execution is enabled this value is ignored
+    /// A value of None or 0 means ORT will pick a default
     pub fn set_inter_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
             SetInterOpNumThreads,
@@ -179,24 +205,29 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Sets the execution mode for the session. Default is set to ORT_SEQUENTIAL.
+    /// See [ONNX_Runtime_Perf_Tuning.md] for more details.
     pub fn set_execution_mode(&mut self, execution_mode: ExecutionMode) -> Result<(), OnnxError> {
         try_invoke!(SetSessionExecutionMode, self.get_ptr_mut(), execution_mode);
         self.execution_mode = execution_mode;
         Ok(())
     }
 
+    /// Enables the use of the memory allocation patterns in the first Run() call for subsequent runs. Default = true.
     pub fn enable_memory_pattern(&mut self) -> Result<(), OnnxError> {
         try_invoke!(EnableMemPattern, self.get_ptr_mut());
         self.enable_memory_pattern = true;
         Ok(())
     }
 
+    /// Disables the use of the memory allocation patterns in the first Run() call for subsequent runs. Default = true.
     pub fn disable_memory_pattern(&mut self) -> Result<(), OnnxError> {
         try_invoke!(EnableMemPattern, self.get_ptr_mut());
         self.enable_memory_pattern = false;
         Ok(())
     }
 
+    /// Enables profiling of InferenceSession.Run() calls. Default is false
     pub fn enable_profiling(&mut self) -> Result<(), OnnxError> {
         let path_prefix = get_path_from_str(&self.profile_output_path_prefix)?;
         try_invoke!(EnableProfiling, self.get_ptr_mut(), path_prefix.as_ptr());
@@ -204,24 +235,28 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Disables profiling of InferenceSession.Run() calls. Default is false
     pub fn disable_profiling(&mut self) -> Result<(), OnnxError> {
         try_invoke!(DisableProfiling, self.get_ptr_mut());
         self.enable_profiling = false;
         Ok(())
     }
 
+    /// Enables Arena allocator for the CPU memory allocations. Default is true.
     pub fn enable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
         try_invoke!(EnableCpuMemArena, self.get_ptr_mut());
         self.is_cpu_mem_arena_enabled = true;
         Ok(())
     }
 
+    /// Disables Arena allocator for the CPU memory allocations. Default is true.
     pub fn disable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
         try_invoke!(DisableCpuMemArena, self.get_ptr_mut());
         self.is_cpu_mem_arena_enabled = false;
         Ok(())
     }
 
+    /// Sets the graph optimization level for the session. Default is set to ORT_ENABLE_ALL.
     pub fn set_graph_optimization_level(
         &mut self,
         graph_optimization_level: GraphOptimizationLevel,
@@ -235,6 +270,7 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Path prefix to use for output of profiling data
     pub fn set_profile_output_path_prefix<S: Into<String>>(
         &mut self,
         profile_output_path_prefix: S,
@@ -267,6 +303,7 @@ impl SessionOptions {
         Ok(())
     }
 
+    /// Sets the Log Id to be used for the session. Default is empty string.
     pub fn set_log_id<S: Into<String>>(&mut self, log_id: S) -> Result<(), OnnxError> {
         self.log_id = log_id.into();
 

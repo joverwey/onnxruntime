@@ -16,7 +16,7 @@ macro_rules! try_get_node_info {
 }
 use crate::{
     check_status, get_path_from_str, node::Node, tensor::Tensor, tensor_element::TensorElement,
-    OnnxError, Opaque, ShapedData, ONNX_NATIVE,
+    OnnxError, OnnxObject, ShapedData, ONNX_NATIVE,
 };
 use onnxruntime_sys::{
     ONNXTensorElementDataType, OrtAllocator, OrtEnv, OrtLoggingLevel, OrtRunOptions, OrtSession,
@@ -33,15 +33,15 @@ use crate::session_options::SessionOptions;
 pub struct Session {
     // The environment has to stay alive for the duration of the session as it is used for internal logging.
     #[allow(dead_code)]
-    env: Opaque<OrtEnv>,
+    env: OnnxObject<OrtEnv>,
     allocator: *mut OrtAllocator,
     /// The input nodes.
     inputs: Vec<Node>,
 
     /// The output nodes.
     outputs: Vec<Node>,
-    onnx_session: Opaque<OrtSession>,
-    run_options: Opaque<OrtRunOptions>,
+    onnx_session: OnnxObject<OrtSession>,
+    run_options: OnnxObject<OrtRunOptions>,
 }
 
 impl Session {
@@ -142,9 +142,9 @@ impl Session {
         );
 
         // First wrap values so we are sure they will be dropped if anything goes wrong below.
-        let values: Vec<Opaque<OrtValue>> = output_pointers
+        let values: Vec<OnnxObject<OrtValue>> = output_pointers
             .into_iter()
-            .map(|ptr| Opaque::new(ptr, ONNX_NATIVE.ReleaseValue))
+            .map(|ptr| OnnxObject::new(ptr, ONNX_NATIVE.ReleaseValue))
             .collect();
 
         let x = values
@@ -203,7 +203,7 @@ impl Session {
         Ok(is_tensor_int == 1)
     }
 
-    fn get_tensor_from_value(&self, mut value: Opaque<OrtValue>) -> Result<Tensor, OnnxError> {
+    fn get_tensor_from_value(&self, mut value: OnnxObject<OrtValue>) -> Result<Tensor, OnnxError> {
         if self.is_tensor(value.get_ptr())? {
             let data_ptr = try_create!(
                 GetTensorMutableData,
@@ -246,7 +246,7 @@ fn try_get_node(
 
     let (shape, data_type) = get_shape_and_type(shape_info)?;
 
-    let _to_drop = Opaque {
+    let _to_drop = OnnxObject {
         ptr: type_info,
         release: ONNX_NATIVE.ReleaseTypeInfo,
     };
@@ -280,7 +280,7 @@ fn get_shape_and_type(
     Ok((shape, data_type))
 }
 
-fn create_env(log_level: OrtLoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
+fn create_env(log_level: OrtLoggingLevel) -> Result<OnnxObject<OrtEnv>, OnnxError> {
     // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
     let c_str = CString::new("onnx_runtime").unwrap();
     // TODO: is it safe to pass c_str as_ptr(). Does the Environment make a copy or refer to this string that will

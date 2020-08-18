@@ -100,7 +100,7 @@ macro_rules! try_create_opaque {
 
         {
             let p = try_create!($function_name, $type_name);
-            Opaque::new(p, ONNX_NATIVE.$release)
+            OnnxObject::new(p, ONNX_NATIVE.$release)
         }
 
     };
@@ -108,7 +108,7 @@ macro_rules! try_create_opaque {
 
         {
             let p = try_create!($function_name, $type_name, $($param),*);
-            Opaque::new(p, ONNX_NATIVE.$release)
+            OnnxObject::new(p, ONNX_NATIVE.$release)
         }
 
     };
@@ -206,14 +206,16 @@ lazy_static! {
     };
 }
 
-struct Opaque<T> {
+/// A reference owning an ONNX Object. This will release the owned memory when dropped by calling
+/// the appropriate ONNX API function.
+struct OnnxObject<T> {
     ptr: *mut T,
     release: Option<unsafe extern "C" fn(input: *mut T)>,
 }
 
-impl<'a, T> Opaque<T> {
-    pub fn new(ptr: *mut T, release: Option<unsafe extern "C" fn(input: *mut T)>) -> Opaque<T> {
-        Opaque { ptr, release }
+impl<'a, T> OnnxObject<T> {
+    pub fn new(ptr: *mut T, release: Option<unsafe extern "C" fn(input: *mut T)>) -> OnnxObject<T> {
+        OnnxObject { ptr, release }
     }
 
     pub(crate) fn get_ptr(&self) -> *const T {
@@ -225,7 +227,7 @@ impl<'a, T> Opaque<T> {
     }
 }
 
-impl<'a, T> Drop for Opaque<T> {
+impl<'a, T> Drop for OnnxObject<T> {
     fn drop(&mut self) {
         unsafe {
             self.release.map(|f| f(self.ptr));
