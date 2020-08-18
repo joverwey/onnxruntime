@@ -21,8 +21,9 @@ use crate::{
 };
 use onnxruntime_sys::{
     GraphOptimizationLevel, ONNXTensorElementDataType, OrtAllocator, OrtApi, OrtEnv,
-    OrtLoggingLevel, OrtRunOptions, OrtSession, OrtSessionOptions, OrtTensorTypeAndShapeInfo,
-    OrtTypeInfo, OrtValue,
+    OrtLoggingLevel, OrtRunOptions, OrtSession, OrtSessionOptions,
+    OrtSessionOptionsAppendExecutionProvider_CUDA, OrtTensorTypeAndShapeInfo, OrtTypeInfo,
+    OrtValue,
 };
 use std::{
     ffi::{c_void, CString},
@@ -33,28 +34,35 @@ use std::{
 use widestring::U16CString;
 
 pub struct SessionOptions {
+    /// The GPU Device Id if any.
+    /// This is typically 0 if there is only one GPU on the system.
+    /// Note that this requires the 'gpu' feature to be enabled.
+    pub gpu_device_id: Option<usize>,
+
+    /// The logging level
     pub log_level: LoggingLevel,
+
+    /// The intra op number of threads.
     pub intra_op_num_threads: Option<usize>,
+
+    ///The inter op number of threads.
     pub inter_op_num_threads: Option<usize>,
 }
 
+/// An ONNX session for a given model. Create tensors that match the input nodes and pass these to the *run* method.
 pub struct Session {
     api: OrtApi,
-    env: *mut OrtEnv,
+    // The environment has to stay alive for the duration of the session as it is used for internal logging.
+    #[allow(dead_code)]
+    env: Opaque<OrtEnv>,
     allocator: *mut OrtAllocator,
-    pub inputs: Vec<Node>,
-    pub outputs: Vec<Node>,
+    /// The input nodes.
+    inputs: Vec<Node>,
+
+    /// The output nodes.
+    outputs: Vec<Node>,
     onnx_session: Opaque<OrtSession>,
     run_options: Opaque<OrtRunOptions>,
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        unsafe {
-            self.api.ReleaseEnv.map(|f| f(self.env));
-        }
-        self.api.ReleaseEnv = None;
-    }
 }
 
 impl SessionOptions {
@@ -63,6 +71,7 @@ impl SessionOptions {
             log_level: LoggingLevel::Warning,
             inter_op_num_threads: None,
             intra_op_num_threads: None,
+            gpu_device_id: None,
         }
     }
 
@@ -85,8 +94,13 @@ impl<'a> Opaque<OrtSessionOptions> {
         api: &'a OrtApi,
         options: &SessionOptions,
     ) -> Result<Opaque<OrtSessionOptions>, OnnxError> {
-        let ptr = try_create!(api, CreateSessionOptions, OrtSessionOptions);
-        let onnx_options = Opaque::new(ptr, api.ReleaseSessionOptions);
+        let mut onnx_options = try_create_opaque!(
+            api,
+            CreateSessionOptions,
+            OrtSessionOptions,
+            api.ReleaseSessionOptions
+        );
+        let ptr = onnx_options.get_mut_ptr();
         if let Some(inter_op_num_threads) = options.inter_op_num_threads {
             try_invoke!(api, SetInterOpNumThreads, ptr, inter_op_num_threads as i32);
         }
@@ -102,6 +116,17 @@ impl<'a> Opaque<OrtSessionOptions> {
             GraphOptimizationLevel::ORT_ENABLE_ALL
         );
 
+        if cfg!(feature = "gpu") {
+            let gpu_device_id = options.gpu_device_id.unwrap_or(0) as i32;
+
+            invoke_fn!(
+                &api,
+                OrtSessionOptionsAppendExecutionProvider_CUDA,
+                ptr,
+                gpu_device_id
+            );
+        }
+
         Ok(onnx_options)
     }
 }
@@ -111,7 +136,7 @@ fn get_model_path_from_str(model_path: &str) -> Result<U16CString, OnnxError> {
     U16CString::from_str(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
 }
 
-// And this function only gets compiled if the target OS is *not* linux
+// And this function only gets compiled if the target OS is *not* windows
 #[cfg(not(target_os = "windows"))]
 fn get_model_path_from_str(model_path: &str) -> Result<CString, OnnxError> {
     CString::new(model_path).map_err(|_| OnnxError::InvalidString(model_path.to_string()))
@@ -130,14 +155,17 @@ impl Session {
         let model_path = get_model_path_from_str(model_path)?;
 
         let options = Opaque::from_options(&api, options)?;
-        let session = try_create!(
+        let onnx_session = try_create_opaque!(
             &api,
             CreateSession,
             OrtSession,
-            env,
+            api.ReleaseSession,
+            env.get_ptr(),
             model_path.as_ptr(),
             options.get_ptr()
         );
+
+        let session = onnx_session.get_ptr();
         let mut input_count = 0;
         try_invoke!(&api, SessionGetInputCount, session, &mut input_count);
         let mut output_count = 0;
@@ -170,9 +198,9 @@ impl Session {
             )?);
         }
 
-        let onnx_session = Opaque::new(session, api.ReleaseSession);
+        let run_options =
+            try_create_opaque!(&api, CreateRunOptions, OrtRunOptions, api.ReleaseRunOptions);
 
-        let run_options = Self::create_run_options(&api)?;
         Ok(Session {
             api,
             env,
@@ -184,6 +212,8 @@ impl Session {
         })
     }
 
+    /// Run the model with the given input tensors.
+    /// The output tensors are returned.
     pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, OnnxError> {
         let input_names_c: Vec<*const i8> = self
             .inputs
@@ -228,6 +258,7 @@ impl Session {
         x
     }
 
+    /// Create a tensor from the flattened data with the given shape.
     pub fn create_tensor_from_shaped_data<T: TensorElement>(
         &self,
         shaped_data: ShapedData<T>,
@@ -236,17 +267,16 @@ impl Session {
 
         let element_type = T::get_type();
         let shape_i64: Vec<i64> = shape.iter().map(|&v| v as i64).collect();
-        let ptr = try_create!(
+        let mut value = try_create_opaque!(
             &self.api,
             CreateTensorAsOrtValue,
             OrtValue,
+            self.api.ReleaseValue,
             self.allocator,
             shape_i64.as_ptr() as *const i64,
             shape.len() as u64,
             element_type
         );
-
-        let mut value = Opaque::new(ptr, self.api.ReleaseValue);
 
         let data_ptr = try_create!(
             &self.api,
@@ -258,6 +288,14 @@ impl Session {
         unsafe { ptr::copy(data.as_ptr(), data_ptr as *mut T, data.len()) };
 
         Ok(Tensor::new(data_ptr, value, element_type, shape.to_vec()))
+    }
+
+    pub fn inputs(&self) -> &[Node] {
+        &self.inputs
+    }
+
+    pub fn outputs(&self) -> &[Node] {
+        &self.outputs
     }
 
     fn is_tensor(&self, ptr: *const OrtValue) -> Result<bool, OnnxError> {
@@ -281,19 +319,15 @@ impl Session {
                 value.get_mut_ptr()
             );
 
-            let shape_info = try_create!(
+            let shape_info = try_create_opaque!(
                 &self.api,
                 GetTensorTypeAndShape,
                 OrtTensorTypeAndShapeInfo,
+                self.api.ReleaseTensorTypeAndShapeInfo,
                 value.get_mut_ptr()
             );
 
-            let _to_drop = Opaque {
-                ptr: shape_info,
-                release: self.api.ReleaseTensorTypeAndShapeInfo,
-            };
-
-            let (shape, data_type) = get_shape_and_type(&self.api, shape_info)?;
+            let (shape, data_type) = get_shape_and_type(&self.api, shape_info.get_ptr())?;
 
             if shape.iter().any(|&s| s <= 0) {
                 return Err(OnnxError::InvalidTensorShape(shape));
@@ -308,14 +342,6 @@ impl Session {
         } else {
             Err(OnnxError::NotATensor)
         }
-    }
-
-    fn create_run_options(api: &OrtApi) -> Result<Opaque<OrtRunOptions>, OnnxError> {
-        let ptr = try_create!(api, CreateRunOptions, OrtRunOptions);
-        Ok(Opaque {
-            ptr,
-            release: api.ReleaseRunOptions,
-        })
     }
 }
 
@@ -366,7 +392,7 @@ fn get_shape_and_type(
     Ok((shape, data_type))
 }
 
-fn create_env(api: &OrtApi, log_level: LoggingLevel) -> Result<*mut OrtEnv, OnnxError> {
+fn create_env(api: &OrtApi, log_level: LoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
     let log_level = match log_level {
         LoggingLevel::Verbose => OrtLoggingLevel::ORT_LOGGING_LEVEL_VERBOSE,
         LoggingLevel::Info => OrtLoggingLevel::ORT_LOGGING_LEVEL_INFO,
@@ -376,7 +402,14 @@ fn create_env(api: &OrtApi, log_level: LoggingLevel) -> Result<*mut OrtEnv, Onnx
     };
 
     let c_str = CString::new("onnx_runtime").unwrap(); // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
-    let env = try_create!(api, CreateEnv, OrtEnv, log_level, c_str.as_ptr());
+    let env = try_create_opaque!(
+        api,
+        CreateEnv,
+        OrtEnv,
+        api.ReleaseEnv,
+        log_level,
+        c_str.as_ptr()
+    );
     Ok(env)
 }
 

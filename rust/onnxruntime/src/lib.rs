@@ -1,3 +1,46 @@
+//! Example usage:
+//!
+//! ``` no_run
+//!# use onnxruntime::shaped_data::ShapedData;
+//!# use onnxruntime::Onnx;
+//!# let onnx = Onnx::new().unwrap();
+//!# use std::path::PathBuf;
+//!# use std::convert::TryInto;
+//!# pub fn get_model_path(filename: &str) -> String {
+//!#    let mut buf: PathBuf = std::env::current_exe().unwrap();
+//!#    while buf.pop() && !buf.ends_with("target") {}
+//!#    buf.push("data");
+//!#    buf.push(filename);
+//!#    buf.to_str().unwrap().into()
+//!# }
+//!let model_path = get_model_path("squeezenet.onnx");
+
+//! //We first create a session for a given model.
+//!let mut session = onnx.create_session(&model_path).unwrap();
+//!
+//! //Next we need to create input tensors. The caller of the model typically knows the shape
+//! //of this data but it can be verified by inspecting the *inputs()* of *session*.
+//!let shape = vec![1, 3, 224, 224];
+//!
+//! //We populate an input vector with arbitrary values that would in practice be read from an image.
+//!let input_tensor_size = shape.iter().product();
+//!let input_tensor_values: Vec<f32> =
+//!     (0..input_tensor_size)
+//!         .map(|i| i as f32 / (input_tensor_size as f32 + 1.0))
+//!         .collect();
+//!
+//! //We then create a tensor from the data with the given shape and run the model,
+//! //in this case with a single input tensor.
+//!let shaped_data = ShapedData::new(shape, input_tensor_values).unwrap();
+//!let inputs = vec![session.create_tensor_from_shaped_data(shaped_data).unwrap()];
+//!let outputs = session.run(&inputs).unwrap();
+//!
+//! //Finally convert the output tensor into a shaped data representation.
+//!let output = &outputs[0];
+//!let shaped_data: ShapedData<f32> = output.try_into().unwrap();
+//! //For SqueezeNet, this represents a one-hot vector representing the probability of
+//! //being one of 1000 classes.
+//! ```
 //-------------------------------------------------------------------------------------------------
 // MACROS
 //-------------------------------------------------------------------------------------------------
@@ -47,6 +90,25 @@ macro_rules! try_create {
     };
 }
 
+macro_rules! try_create_opaque {
+    ($api:expr, $function_name:ident, $type_name:ty, $release:expr) => {
+
+        {
+            let p = try_create!($api, $function_name, $type_name);
+            Opaque::new(p, $release)
+        }
+
+    };
+    ($api:expr, $function_name:ident, $type_name:ty, $release:expr $(, $param:expr)*) => {
+
+        {
+            let p = try_create!($api, $function_name, $type_name, $($param),*);
+            Opaque::new(p, $release)
+        }
+
+    };
+}
+
 //-------------------------------------------------------------------------------------------------
 // IMPORTS
 //-------------------------------------------------------------------------------------------------
@@ -80,7 +142,6 @@ pub enum LoggingLevel {
 }
 
 //-------------------------------------------------------------------------------------------------
-///An error type to represent a bounded set of things that can go wrong while using this API.
 #[derive(Error, Debug)]
 pub enum OnnxError {
     #[error("The Api function pointer for '{0}' was null")]
@@ -118,12 +179,12 @@ pub enum OnnxError {
 }
 
 //-------------------------------------------------------------------------------------------------
-/// The main API class used for most functions and object creation.
+/// The main API class used to create a session.
 pub struct Onnx {
     api: OrtApi,
 }
 
-pub struct Opaque<T> {
+struct Opaque<T> {
     ptr: *mut T,
     release: Option<unsafe extern "C" fn(input: *mut T)>,
 }
@@ -158,7 +219,7 @@ impl Onnx {
     //---------------------------------------------------------------------------------------------
     // PUBLIC
     //---------------------------------------------------------------------------------------------
-    /// Create a new instance of the ONNX API with the given LoggingLevel of the environment.
+    /// Create a new instance of the ONNX API.
     pub fn new() -> Result<Onnx, OnnxError> {
         unsafe {
             let ort = OrtGetApiBase();
@@ -177,11 +238,13 @@ impl Onnx {
         }
     }
 
+    /// Create a session for the model at the given path
     pub fn create_session(self, model_path: &str) -> Result<Session, OnnxError> {
         let options = SessionOptions::new();
         Session::new(self.api, model_path, &options)
     }
 
+    /// Create a session for the model at the given path, applying the specified options.
     pub fn create_session_with_options(
         self,
         model_path: &str,
@@ -220,14 +283,14 @@ fn check_status(api: &OrtApi, status: *mut OrtStatus) -> Result<(), OnnxError> {
 // TESTS
 //---------------------------------------------------------------------------------------------
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::PathBuf;
 
     pub fn get_model_path(filename: &str) -> String {
         let mut buf: PathBuf = std::env::current_exe().unwrap();
         while buf.pop() && !buf.ends_with("onnxruntime") {}
         buf.push("csharp");
-        buf.push("testdata");
+        buf.push("testdata");        
         buf.push(filename);
         buf.to_str().unwrap().into()
     }

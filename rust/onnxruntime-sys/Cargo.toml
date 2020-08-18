@@ -7,6 +7,10 @@ edition = "2018"
 [dependencies]
 libc = "0.2"
 
+
+[features]
+gpu = []
+
 [build-dependencies]
 bindgen = "0.54.1"
 librarian = "0.2.2"

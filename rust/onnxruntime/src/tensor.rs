@@ -1,6 +1,8 @@
 use crate::{tensor_element::TensorElement, OnnxError, Opaque};
 use onnxruntime_sys::{ONNXTensorElementDataType, OrtValue};
 use std::{ffi::c_void, ptr};
+
+/// An ONNX Tensor
 pub struct Tensor {
     data_ptr: *mut c_void,
     value: Opaque<OrtValue>,
@@ -9,7 +11,7 @@ pub struct Tensor {
 }
 
 impl Tensor {
-    pub fn new(
+    pub(crate) fn new(
         data_ptr: *mut c_void,
         value: Opaque<OrtValue>,
         element_type: ONNXTensorElementDataType,
@@ -23,19 +25,21 @@ impl Tensor {
         }
     }
 
+    /// The total number of elements in this tensor when flattened.
     pub fn element_count(&self) -> usize {
         self.shape.iter().product()
     }
 
+    /// The number of elements in each dimension.
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
 
-    pub fn value(&self) -> &Opaque<OrtValue> {
+    pub(crate) fn value(&self) -> &Opaque<OrtValue> {
         &self.value
     }
 
-    pub fn copy_data<T: TensorElement>(&self) -> Result<Vec<T>, OnnxError> {
+    pub(crate) fn copy_data<T: TensorElement>(&self) -> Result<Vec<T>, OnnxError> {
         if self.element_type != T::get_type() {
             return Err(OnnxError::TensorTypeMismatch(
                 format!("{}", T::get_type()),
