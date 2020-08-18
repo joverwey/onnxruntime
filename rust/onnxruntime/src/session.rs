@@ -1,8 +1,7 @@
 macro_rules! try_get_node_info {
-    ($api: expr, $get_name: ident, $get_type_info: ident, $session: expr, $allocator: expr, $index: expr) => {{
+    ($get_name: ident, $get_type_info: ident, $session: expr, $allocator: expr, $index: expr) => {{
         let mut raw_name: *mut ::std::os::raw::c_char = std::ptr::null_mut();
         try_invoke!(
-            $api,
             $get_name,
             $session,
             $index as u64,
@@ -10,9 +9,9 @@ macro_rules! try_get_node_info {
             &mut raw_name
         );
 
-        let type_info = try_create!($api, $get_type_info, OrtTypeInfo, $session, $index as u64);
+        let type_info = try_create!($get_type_info, OrtTypeInfo, $session, $index as u64);
 
-        try_get_node($api, type_info, raw_name, $allocator)
+        try_get_node(type_info, raw_name, $allocator)
     }};
 }
 use crate::{
@@ -20,8 +19,8 @@ use crate::{
     OnnxError, Opaque, ShapedData, ONNX_NATIVE,
 };
 use onnxruntime_sys::{
-    ONNXTensorElementDataType, OrtAllocator, OrtApi, OrtEnv, OrtLoggingLevel, OrtRunOptions,
-    OrtSession, OrtTensorTypeAndShapeInfo, OrtTypeInfo, OrtValue,
+    ONNXTensorElementDataType, OrtAllocator, OrtEnv, OrtLoggingLevel, OrtRunOptions, OrtSession,
+    OrtTensorTypeAndShapeInfo, OrtTypeInfo, OrtValue,
 };
 use std::{
     ffi::{c_void, CString},
@@ -56,16 +55,15 @@ impl Session {
         model_path: &str,
         options: &SessionOptions,
     ) -> Result<Session, OnnxError> {
-        let env = create_env(&ONNX_NATIVE, options.log_severity_level())?;
+        let env = create_env(options.log_severity_level())?;
 
         let model_path = get_path_from_str(model_path)?;
 
-        let options = Opaque::from_options(&ONNX_NATIVE, options)?;
+        let options = Opaque::from_options(options)?;
         let onnx_session = try_create_opaque!(
-            &ONNX_NATIVE,
             CreateSession,
             OrtSession,
-            ONNX_NATIVE.ReleaseSession,
+            ReleaseSession,
             env.get_ptr(),
             model_path.as_ptr(),
             options.get_ptr()
@@ -73,28 +71,17 @@ impl Session {
 
         let session = onnx_session.get_ptr();
         let mut input_count = 0;
-        try_invoke!(
-            &ONNX_NATIVE,
-            SessionGetInputCount,
-            session,
-            &mut input_count
-        );
+        try_invoke!(SessionGetInputCount, session, &mut input_count);
         let mut output_count = 0;
-        try_invoke!(
-            &ONNX_NATIVE,
-            SessionGetOutputCount,
-            session,
-            &mut output_count
-        );
+        try_invoke!(SessionGetOutputCount, session, &mut output_count);
 
-        let allocator = try_create!(&ONNX_NATIVE, GetAllocatorWithDefaultOptions, OrtAllocator);
+        let allocator = try_create!(GetAllocatorWithDefaultOptions, OrtAllocator);
 
         let mut inputs: Vec<Node> = Vec::new();
         let mut outputs: Vec<Node> = Vec::new();
 
         for i in 0..input_count as usize {
             inputs.push(try_get_node_info!(
-                &ONNX_NATIVE,
                 SessionGetInputName,
                 SessionGetInputTypeInfo,
                 session,
@@ -105,7 +92,6 @@ impl Session {
 
         for i in 0..output_count as usize {
             outputs.push(try_get_node_info!(
-                &ONNX_NATIVE,
                 SessionGetOutputName,
                 SessionGetOutputTypeInfo,
                 session,
@@ -114,12 +100,7 @@ impl Session {
             )?);
         }
 
-        let run_options = try_create_opaque!(
-            &ONNX_NATIVE,
-            CreateRunOptions,
-            OrtRunOptions,
-            ONNX_NATIVE.ReleaseRunOptions
-        );
+        let run_options = try_create_opaque!(CreateRunOptions, OrtRunOptions, ReleaseRunOptions);
 
         Ok(Session {
             env,
@@ -152,7 +133,6 @@ impl Session {
         let mut output_pointers: Vec<*mut OrtValue> = vec![std::ptr::null_mut(); output_count];
 
         try_invoke!(
-            &ONNX_NATIVE,
             Run,
             self.onnx_session.get_mut_ptr(),
             self.run_options.get_ptr(),
@@ -187,10 +167,9 @@ impl Session {
         let element_type = T::get_type();
         let shape_i64: Vec<i64> = shape.iter().map(|&v| v as i64).collect();
         let mut value = try_create_opaque!(
-            &ONNX_NATIVE,
             CreateTensorAsOrtValue,
             OrtValue,
-            ONNX_NATIVE.ReleaseValue,
+            ReleaseValue,
             self.allocator,
             shape_i64.as_ptr() as *const i64,
             shape.len() as u64,
@@ -198,7 +177,6 @@ impl Session {
         );
 
         let data_ptr = try_create!(
-            &ONNX_NATIVE,
             GetTensorMutableData,
             std::os::raw::c_void,
             value.get_mut_ptr()
@@ -220,7 +198,6 @@ impl Session {
     fn is_tensor(&self, ptr: *const OrtValue) -> Result<bool, OnnxError> {
         let mut is_tensor_int = 0;
         try_invoke!(
-            &ONNX_NATIVE,
             IsTensor,
             ptr,
             &mut is_tensor_int as *mut std::os::raw::c_int
@@ -232,21 +209,19 @@ impl Session {
     fn get_tensor_from_value(&self, mut value: Opaque<OrtValue>) -> Result<Tensor, OnnxError> {
         if self.is_tensor(value.get_ptr())? {
             let data_ptr = try_create!(
-                &ONNX_NATIVE,
                 GetTensorMutableData,
                 std::os::raw::c_void,
                 value.get_mut_ptr()
             );
 
             let shape_info = try_create_opaque!(
-                &ONNX_NATIVE,
                 GetTensorTypeAndShape,
                 OrtTensorTypeAndShapeInfo,
-                ONNX_NATIVE.ReleaseTensorTypeAndShapeInfo,
+                ReleaseTensorTypeAndShapeInfo,
                 value.get_mut_ptr()
             );
 
-            let (shape, data_type) = get_shape_and_type(&ONNX_NATIVE, shape_info.get_ptr())?;
+            let (shape, data_type) = get_shape_and_type(shape_info.get_ptr())?;
 
             if shape.iter().any(|&s| s <= 0) {
                 return Err(OnnxError::InvalidTensorShape(shape));
@@ -265,19 +240,18 @@ impl Session {
 }
 
 fn try_get_node(
-    api: &OrtApi,
     type_info: *mut OrtTypeInfo,
     raw_name: *mut i8,
     allocator: *mut OrtAllocator,
 ) -> Result<Node, OnnxError> {
     let mut shape_info: *const OrtTensorTypeAndShapeInfo = std::ptr::null_mut();
-    try_invoke!(api, CastTypeInfoToTensorInfo, type_info, &mut shape_info);
+    try_invoke!(CastTypeInfoToTensorInfo, type_info, &mut shape_info);
 
-    let (shape, data_type) = get_shape_and_type(api, shape_info)?;
+    let (shape, data_type) = get_shape_and_type(shape_info)?;
 
     let _to_drop = Opaque {
         ptr: type_info,
-        release: api.ReleaseTypeInfo,
+        release: ONNX_NATIVE.ReleaseTypeInfo,
     };
 
     Ok(Node::new(
@@ -285,23 +259,21 @@ fn try_get_node(
         raw_name as *mut c_void,
         shape,
         allocator,
-        api.AllocatorFree,
+        ONNX_NATIVE.AllocatorFree,
     ))
 }
 
 fn get_shape_and_type(
-    api: &OrtApi,
     shape_info: *const OrtTensorTypeAndShapeInfo,
 ) -> Result<(Vec<i64>, ONNXTensorElementDataType), OnnxError> {
     let mut data_type = ONNXTensorElementDataType::ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
-    try_invoke!(api, GetTensorElementType, shape_info, &mut data_type);
+    try_invoke!(GetTensorElementType, shape_info, &mut data_type);
 
     let mut num_dimensions = 0;
-    try_invoke!(api, GetDimensionsCount, shape_info, &mut num_dimensions);
+    try_invoke!(GetDimensionsCount, shape_info, &mut num_dimensions);
 
     let mut shape = vec![0i64; num_dimensions as usize];
     try_invoke!(
-        &api,
         GetDimensions,
         shape_info,
         shape.as_mut_ptr() as *mut i64,
@@ -311,16 +283,12 @@ fn get_shape_and_type(
     Ok((shape, data_type))
 }
 
-fn create_env(api: &OrtApi, log_level: OrtLoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
-    let c_str = CString::new("onnx_runtime").unwrap(); // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
-    let env = try_create_opaque!(
-        api,
-        CreateEnv,
-        OrtEnv,
-        api.ReleaseEnv,
-        log_level,
-        c_str.as_ptr()
-    );
+fn create_env(log_level: OrtLoggingLevel) -> Result<Opaque<OrtEnv>, OnnxError> {
+    // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
+    let c_str = CString::new("onnx_runtime").unwrap();
+    // TODO: is it safe to pass c_str as_ptr(). Does the Environment make a copy or refer to this string that will
+    // soon be deallocated?
+    let env = try_create_opaque!(CreateEnv, OrtEnv, ReleaseEnv, log_level, c_str.as_ptr());
     Ok(env)
 }
 

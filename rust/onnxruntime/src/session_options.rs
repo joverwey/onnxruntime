@@ -1,6 +1,6 @@
 use crate::{check_status, get_path_from_str, OnnxError, Opaque, ONNX_NATIVE};
 use onnxruntime_sys::{
-    ExecutionMode, GraphOptimizationLevel, OrtApi, OrtLoggingLevel, OrtSessionOptions,
+    ExecutionMode, GraphOptimizationLevel, OrtLoggingLevel, OrtSessionOptions,
     OrtSessionOptionsAppendExecutionProvider_CUDA,
 };
 use std::ffi::CString;
@@ -44,10 +44,9 @@ pub struct SessionOptions {
 impl SessionOptions {
     pub fn new() -> Result<SessionOptions, OnnxError> {
         let native_options = try_create_opaque!(
-            &ONNX_NATIVE,
             CreateSessionOptions,
             OrtSessionOptions,
-            ONNX_NATIVE.ReleaseSessionOptions
+            ReleaseSessionOptions
         );
 
         Ok(SessionOptions {
@@ -118,7 +117,6 @@ impl SessionOptions {
         log_severity_level: OrtLoggingLevel,
     ) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetSessionLogSeverityLevel,
             self.get_native_ptr(),
             log_severity_level as i32
@@ -129,7 +127,6 @@ impl SessionOptions {
 
     pub fn set_log_verbosity_level(&mut self, log_verbosity_level: usize) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetSessionLogVerbosityLevel,
             self.get_native_ptr(),
             log_verbosity_level as i32
@@ -140,7 +137,6 @@ impl SessionOptions {
 
     pub fn set_intra_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetInterOpNumThreads,
             self.get_native_ptr(),
             number_of_threads as i32
@@ -151,7 +147,6 @@ impl SessionOptions {
 
     pub fn set_inter_op_num_threads(&mut self, number_of_threads: usize) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetInterOpNumThreads,
             self.get_native_ptr(),
             number_of_threads as i32
@@ -162,7 +157,6 @@ impl SessionOptions {
 
     pub fn set_execution_mode(&mut self, execution_mode: ExecutionMode) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetSessionExecutionMode,
             self.get_native_ptr(),
             execution_mode
@@ -172,43 +166,38 @@ impl SessionOptions {
     }
 
     pub fn enable_memory_pattern(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(&ONNX_NATIVE, EnableMemPattern, self.get_native_ptr());
+        try_invoke!(EnableMemPattern, self.get_native_ptr());
         self.enable_memory_pattern = true;
         Ok(())
     }
 
     pub fn disable_memory_pattern(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(&ONNX_NATIVE, EnableMemPattern, self.get_native_ptr());
+        try_invoke!(EnableMemPattern, self.get_native_ptr());
         self.enable_memory_pattern = false;
         Ok(())
     }
 
     pub fn enable_profiling(&mut self) -> Result<(), OnnxError> {
         let path_prefix = get_path_from_str(&self.profile_output_path_prefix)?;
-        try_invoke!(
-            &ONNX_NATIVE,
-            EnableProfiling,
-            self.get_native_ptr(),
-            path_prefix.as_ptr()
-        );
+        try_invoke!(EnableProfiling, self.get_native_ptr(), path_prefix.as_ptr());
         self.enable_profiling = true;
         Ok(())
     }
 
     pub fn disable_profiling(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(&ONNX_NATIVE, DisableProfiling, self.get_native_ptr());
+        try_invoke!(DisableProfiling, self.get_native_ptr());
         self.enable_profiling = false;
         Ok(())
     }
 
     pub fn enable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(&ONNX_NATIVE, EnableCpuMemArena, self.get_native_ptr());
+        try_invoke!(EnableCpuMemArena, self.get_native_ptr());
         self.is_cpu_mem_arena_enabled = true;
         Ok(())
     }
 
     pub fn disable_cpu_mem_arena(&mut self) -> Result<(), OnnxError> {
-        try_invoke!(&ONNX_NATIVE, DisableCpuMemArena, self.get_native_ptr());
+        try_invoke!(DisableCpuMemArena, self.get_native_ptr());
         self.is_cpu_mem_arena_enabled = false;
         Ok(())
     }
@@ -218,7 +207,6 @@ impl SessionOptions {
         graph_optimization_level: GraphOptimizationLevel,
     ) -> Result<(), OnnxError> {
         try_invoke!(
-            &ONNX_NATIVE,
             SetSessionGraphOptimizationLevel,
             self.get_native_ptr(),
             graph_optimization_level
@@ -239,12 +227,7 @@ impl SessionOptions {
 
         let c_str = CString::new(self.log_id.clone()).unwrap(); // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
 
-        try_invoke!(
-            &ONNX_NATIVE,
-            SetSessionLogId,
-            self.get_native_ptr(),
-            c_str.into_raw()
-        );
+        try_invoke!(SetSessionLogId, self.get_native_ptr(), c_str.into_raw());
 
         Ok(())
     }
@@ -255,19 +238,16 @@ impl<'a> Opaque<OrtSessionOptions> {
     /// Create SessionOptions that allows control of the number of threads used
     /// and the kind of optimizations that are applied to the computation graph.
     pub(crate) fn from_options(
-        api: &'a OrtApi,
         options: &SessionOptions,
     ) -> Result<Opaque<OrtSessionOptions>, OnnxError> {
         let mut onnx_options = try_create_opaque!(
-            api,
             CreateSessionOptions,
             OrtSessionOptions,
-            api.ReleaseSessionOptions
+            ReleaseSessionOptions
         );
         let ptr = onnx_options.get_mut_ptr();
 
         try_invoke!(
-            api,
             SetSessionGraphOptimizationLevel,
             ptr,
             GraphOptimizationLevel::ORT_ENABLE_ALL
@@ -277,7 +257,6 @@ impl<'a> Opaque<OrtSessionOptions> {
             let gpu_device_id = options.gpu_device_id as i32;
 
             invoke_fn!(
-                &api,
                 OrtSessionOptionsAppendExecutionProvider_CUDA,
                 ptr,
                 gpu_device_id

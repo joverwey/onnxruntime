@@ -46,48 +46,49 @@
 #[macro_use]
 
 macro_rules! try_get_fn {
-    ($api:expr, $function_name:ident) => {
-        $api.$function_name
+    ($function_name:ident) => {
+        &ONNX_NATIVE
+            .$function_name
             .ok_or(OnnxError::ApiFunctionError(stringify!($function_name)))?
     };
 }
 
 macro_rules! invoke_fn {
-    ($api:expr, $function_name:ident) => {
+    ($function_name:ident) => {
         let status = unsafe {$function_name()};
-        check_status($api, status)?
+        check_status(status)?
     };
-    ($api:expr, $function_name:ident $(, $param:expr)*) => {
+    ($function_name:ident $(, $param:expr)*) => {
         let status = unsafe {$function_name($($param),*)};
-        check_status($api, status)?
+        check_status(status)?
     };
 
 }
 
 macro_rules! try_invoke {
-    ($api:expr, $function_name:ident $(, $param:expr)*) => {
-        let f = try_get_fn!($api, $function_name);
-        invoke_fn!($api, f, $($param),*)
+    ($function_name:ident $(, $param:expr)*) => {
+        let f = try_get_fn!($function_name);
+        invoke_fn!(f, $($param),*)
     };
 }
 
 macro_rules! try_create {
-    ($api:expr, $function_name:ident, $type_name:ty) => {
+    ($function_name:ident, $type_name:ty) => {
 
         {
             let mut t: *mut $type_name = std::ptr::null_mut();
             let t_ptr: *mut *mut $type_name = &mut t;
-            try_invoke!($api, $function_name, t_ptr);
+            try_invoke!($function_name, t_ptr);
             t
         }
 
     };
-    ($api:expr, $function_name:ident, $type_name:ty $(, $param:expr)*) => {
+    ($function_name:ident, $type_name:ty $(, $param:expr)*) => {
 
         {
             let mut t: *mut $type_name = std::ptr::null_mut();
             let t_ptr: *mut *mut $type_name = &mut t;
-            try_invoke!($api, $function_name, $($param),*, t_ptr);
+            try_invoke!($function_name, $($param),*, t_ptr);
             t
         }
 
@@ -95,19 +96,19 @@ macro_rules! try_create {
 }
 
 macro_rules! try_create_opaque {
-    ($api:expr, $function_name:ident, $type_name:ty, $release:expr) => {
+    ($function_name:ident, $type_name:ty, $release:ident) => {
 
         {
-            let p = try_create!($api, $function_name, $type_name);
-            Opaque::new(p, $release)
+            let p = try_create!($function_name, $type_name);
+            Opaque::new(p, ONNX_NATIVE.$release)
         }
 
     };
-    ($api:expr, $function_name:ident, $type_name:ty, $release:expr $(, $param:expr)*) => {
+    ($function_name:ident, $type_name:ty, $release:ident $(, $param:expr)*) => {
 
         {
-            let p = try_create!($api, $function_name, $type_name, $($param),*);
-            Opaque::new(p, $release)
+            let p = try_create!($function_name, $type_name, $($param),*);
+            Opaque::new(p, ONNX_NATIVE.$release)
         }
 
     };
@@ -246,12 +247,12 @@ fn get_path_from_str(model_path: &str) -> Result<CString, OnnxError> {
 //---------------------------------------------------------------------------------------------
 /// Verify that the status is ok. A status that is NULL is considered ok, otherwise it would
 /// represent an error condition.
-fn check_status(api: &OrtApi, status: *mut OrtStatus) -> Result<(), OnnxError> {
+fn check_status(status: *mut OrtStatus) -> Result<(), OnnxError> {
     if status.is_null() {
         Ok(())
     } else {
         unsafe {
-            let get_error_str = try_get_fn!(api, GetErrorMessage);
+            let get_error_str = try_get_fn!(GetErrorMessage);
             let char_ptr = get_error_str(status);
             let c_str = CStr::from_ptr(char_ptr);
             let error_message = c_str
@@ -259,7 +260,7 @@ fn check_status(api: &OrtApi, status: *mut OrtStatus) -> Result<(), OnnxError> {
                 .map(|s| s.to_string())
                 .map_err(|_| OnnxError::InvalidErrorMessage)?;
 
-            let release_status = try_get_fn!(api, ReleaseStatus);
+            let release_status = try_get_fn!(ReleaseStatus);
             release_status(status);
             Err(OnnxError::Status(error_message))
         }
