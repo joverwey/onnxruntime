@@ -120,6 +120,7 @@ macro_rules! try_create_opaque {
 pub mod node;
 pub mod session;
 pub mod session_options;
+pub mod run_options;
 pub mod shaped_data;
 pub mod tensor;
 pub mod tensor_element;
