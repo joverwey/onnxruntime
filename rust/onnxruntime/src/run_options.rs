@@ -1,19 +1,19 @@
 use crate::{check_status, OnnxError, OnnxObject, ONNX_NATIVE};
 use onnxruntime_sys::{OrtLoggingLevel, OrtRunOptions};
 use std::ffi::{CStr, CString};
-use std::ptr;
 
 /// Configuration information for a single Run.
 pub struct RunOptions {
+
     native_options: OnnxObject<OrtRunOptions>,
+
+    terminate: bool,
 
     /// Log Verbosity Level for a particular Run() invocation. Default = 0. Valid values are >=0.
     /// This takes into effect only when the LogSeverityLevel is set to ORT_LOGGING_LEVEL_VERBOSE.
     log_verbosity_level: usize,
     /// Log Severity Level for a particular Run() invocation. Default = ORT_LOGGING_LEVEL_WARNING
     log_severity_level: OrtLoggingLevel,
-
-    log_id: Option<CString>,
 }
 
 impl RunOptions {
@@ -30,9 +30,29 @@ impl RunOptions {
             native_options,
             log_severity_level: OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING,
             log_verbosity_level: 0,
-            log_id: None
+            terminate: false
         })
     }
+
+    pub fn should_terminate(&self) -> bool {
+        self.terminate
+    }
+
+    pub fn set_terminate(&mut self, should_terminate: bool) -> Result<(), OnnxError> {
+        if should_terminate != self.terminate {
+            if should_terminate {
+                try_invoke!(RunOptionsSetTerminate, self.native_options.get_mut_ptr());
+            }
+            else {
+                try_invoke!(RunOptionsUnsetTerminate, self.native_options.get_mut_ptr());
+            }
+
+            self.terminate = should_terminate;
+        }
+
+        Ok(())
+    }
+
     /// Log Verbosity Level for the run. Default = 0. Valid values are >=0.
     pub fn log_verbosity_level(&self) -> usize {
         self.log_verbosity_level
@@ -45,10 +65,10 @@ impl RunOptions {
 
     /// Log Id to be used for the run.
     pub fn log_id(&self) -> Result<String, OnnxError> {
-            let tag_ptr: *mut *const ::std::os::raw::c_char = ptr::null_mut();
-            try_invoke!(RunOptionsGetRunTag, self.native_options.get_ptr(), tag_ptr);
+            let mut tag_ptr: *const ::std::os::raw::c_char = std::ptr::null();
+            try_invoke!(RunOptionsGetRunTag, self.native_options.get_ptr(), &mut tag_ptr);
 
-            let tag = unsafe { CStr::from_ptr(*tag_ptr) };
+            let tag = unsafe { CStr::from_ptr(tag_ptr) };
 
             let log_id = tag.to_str().expect("We expect ONNX to return valid UTF8");
 
@@ -87,9 +107,38 @@ impl RunOptions {
 
         try_invoke!(RunOptionsSetRunTag, self.native_options.get_mut_ptr(), c_string.as_ptr());
 
-        // ONNX just keeps a reference to the pointer so we need to store the text so that it
-        // outlives the stack frame.
-        self.log_id = Some(c_string);
+        Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{OnnxError, OrtLoggingLevel};
+    use crate::run_options::RunOptions;
+    #[test]
+    fn test_run_options() -> Result<(), OnnxError> {
+        let mut opt = RunOptions::new()?;
+
+        //verify default options
+        assert!(!opt.should_terminate());
+        assert_eq!(0, opt.log_verbosity_level());
+        assert_eq!(OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING, opt.log_severity_level());
+        assert_eq!("", opt.log_id()?);
+
+        // try setting options
+        opt.set_terminate(true)?;
+        assert!(opt.should_terminate());
+
+        opt.set_log_verbosity_level(1)?;
+        assert_eq!(1, opt.log_verbosity_level());
+
+        opt.set_log_severity_level(OrtLoggingLevel::ORT_LOGGING_LEVEL_ERROR)?;
+        assert_eq!(OrtLoggingLevel::ORT_LOGGING_LEVEL_ERROR, opt.log_severity_level());
+
+        opt.set_log_id("MyLogTag")?;
+        assert_eq!("MyLogTag", opt.log_id()?);
+
         Ok(())
     }
 }
