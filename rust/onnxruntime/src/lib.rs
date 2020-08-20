@@ -125,14 +125,18 @@ pub mod shaped_data;
 pub mod tensor;
 pub mod tensor_element;
 
-use onnxruntime_sys::{OrtApi, OrtGetApiBase, OrtStatus};
+pub use onnxruntime_sys::ONNXTensorElementDataType as TensorElementDataType;
+
+use onnxruntime_sys::{OrtApi, OrtGetApiBase, OrtStatus, OrtLoggingLevel, OrtEnv};
 
 use lazy_static::lazy_static;
 use shaped_data::ShapedData;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use thiserror::Error;
 #[cfg(target_os = "windows")]
 use widestring::U16CString;
+use std::sync::{Mutex};
+
 
 //-------------------------------------------------------------------------------------------------
 // CONSTANTS
@@ -142,7 +146,7 @@ const ORT_API_VERSION: u32 = 2;
 //-------------------------------------------------------------------------------------------------
 // TYPES
 //-------------------------------------------------------------------------------------------------
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum OnnxError {
     #[error("The Api function pointer for '{0}' was null")]
     ApiFunctionError(&'static str),
@@ -182,12 +186,17 @@ pub enum OnnxError {
 
     #[error("CUDA was requested but this version of ONNX does not support CUDA. Use the 'gpu' feature flag.")]
     CudaNotSupported,
+
+    #[error("Unable to obtain an exclusive lock to the Environment.")]
+    EnvironmentLocked,
+
+
 }
 
 //-------------------------------------------------------------------------------------------------
 
 lazy_static! {
-    pub static ref ONNX_NATIVE: OrtApi = {
+    pub(crate) static ref ONNX_NATIVE: OrtApi = {
         unsafe {
             let ort = OrtGetApiBase();
             if ort.is_null() {
@@ -206,6 +215,17 @@ lazy_static! {
         }
     };
 }
+
+lazy_static! {
+    pub(crate) static ref ONNX_ENV: Result<Mutex<OnnxObject<OrtEnv>>, OnnxError> = {
+        let c_str = CString::new("onnx_runtime").unwrap();
+        let env = try_create_opaque!(CreateEnv, OrtEnv, ReleaseEnv, OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING, c_str.as_ptr());
+        Ok(Mutex::new(env))
+    };
+}
+
+/// This is safe since no one can access ort env without acquiring a mutex.
+unsafe impl Send for OnnxObject<OrtEnv> {}
 
 /// A reference owning an ONNX Object. This will release the owned memory when dropped by calling
 /// the appropriate ONNX API function.

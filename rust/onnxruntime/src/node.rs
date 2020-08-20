@@ -3,7 +3,7 @@ use ffi::CStr;
 use onnxruntime_sys::{ONNXTensorElementDataType, OrtAllocator, OrtStatus};
 use std::ffi;
 pub struct Node {
-    pub(crate) data_type: ONNXTensorElementDataType,
+    pub data_type: ONNXTensorElementDataType,
     pub(crate) raw_name: *mut ffi::c_void,
     shape: Vec<i64>,
     allocator: *mut OrtAllocator,
@@ -42,7 +42,11 @@ impl Node {
         c_str.to_str().unwrap_or("invalid_utf8_name")
     }
 
-    pub fn shape(&self) -> &[i64] {
+    pub fn data_type(&self) -> ONNXTensorElementDataType {
+        self.data_type
+    }
+
+    pub fn dimensions(&self) -> &[i64] {
         &self.shape
     }
 

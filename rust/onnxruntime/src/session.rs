@@ -16,14 +16,14 @@ macro_rules! try_get_node_info {
 }
 use crate::{
     check_status, get_path_from_str, node::Node, tensor::Tensor, tensor_element::TensorElement,
-    OnnxError, OnnxObject, ShapedData, ONNX_NATIVE,
+    OnnxError, OnnxObject, ShapedData, ONNX_NATIVE, ONNX_ENV
 };
 use onnxruntime_sys::{
-    ONNXTensorElementDataType, OrtAllocator, OrtEnv, OrtLoggingLevel, OrtRunOptions, OrtSession,
-    OrtTensorTypeAndShapeInfo, OrtTypeInfo, OrtValue,
+    ONNXTensorElementDataType, OrtAllocator, OrtRunOptions, OrtSession,
+    OrtTensorTypeAndShapeInfo, OrtTypeInfo, OrtValue
 };
 use std::{
-    ffi::{c_void, CString},
+    ffi::{c_void},
     ptr,
 };
 
@@ -31,9 +31,6 @@ use crate::session_options::SessionOptions;
 
 /// An ONNX session for a given model. Create tensors that match the input nodes and pass these to the *run* method.
 pub struct Session {
-    // The environment has to stay alive for the duration of the session as it is used for internal logging.
-    #[allow(dead_code)]
-    env: OnnxObject<OrtEnv>,
     allocator: *mut OrtAllocator,
     /// The input nodes.
     inputs: Vec<Node>,
@@ -53,18 +50,26 @@ impl Session {
     //---------------------------------------------------------------------------------------------
     /// Create a new session for the model at the given path using the specified options.
     pub fn from_options(model_path: &str, options: &SessionOptions) -> Result<Session, OnnxError> {
-        let env = create_env(options.log_severity_level())?;
+        //let env:&Result<Mutex<OnnxObject<OrtEnv>>, OnnxError> = ONNX_ENV.as_ref();
 
         let model_path = get_path_from_str(model_path)?;
 
+        let env_ptr =
+            ONNX_ENV
+                .as_ref()
+                .map_err(|e| e.clone())?
+                .lock()
+                .map_err(|_| OnnxError::EnvironmentLocked)?
+                .get_ptr();
+
+
         let onnx_session = try_create_opaque!(
-            CreateSession,
-            OrtSession,
-            ReleaseSession,
-            env.get_ptr(),
-            model_path.as_ptr(),
-            options.get_ptr()
-        );
+                CreateSession,
+                OrtSession,
+                ReleaseSession,
+                env_ptr,
+                model_path.as_ptr(),
+                options.get_ptr());
 
         let session = onnx_session.get_ptr();
         let mut input_count = 0;
@@ -100,7 +105,6 @@ impl Session {
         let run_options = try_create_opaque!(CreateRunOptions, OrtRunOptions, ReleaseRunOptions);
 
         Ok(Session {
-            env,
             inputs,
             allocator,
             outputs,
@@ -188,8 +192,16 @@ impl Session {
         &self.inputs
     }
 
+    pub fn input(&self, name: &str) -> Option<&Node> {
+        self.inputs.iter().find(|node| node.name() == name)
+    }
+
     pub fn outputs(&self) -> &[Node] {
         &self.outputs
+    }
+
+    pub fn output(&self, name: &str) -> Option<&Node> {
+        self.outputs.iter().find(|node| node.name() == name)
     }
 
     fn is_tensor(&self, ptr: *const OrtValue) -> Result<bool, OnnxError> {
@@ -280,20 +292,12 @@ fn get_shape_and_type(
     Ok((shape, data_type))
 }
 
-fn create_env(log_level: OrtLoggingLevel) -> Result<OnnxObject<OrtEnv>, OnnxError> {
-    // This should be safe since Rust strings consist of valid UTF8 and cannot contain a \0 byte.
-    let c_str = CString::new("onnx_runtime").unwrap();
-    // TODO: is it safe to pass c_str as_ptr(). Does the Environment make a copy or refer to this string that will
-    // soon be deallocated?
-    let env = try_create_opaque!(CreateEnv, OrtEnv, ReleaseEnv, log_level, c_str.as_ptr());
-    Ok(env)
-}
 
 #[cfg(test)]
 mod tests {
 
     use crate::session::Session;
-    use crate::{shaped_data::ShapedData, tests::get_model_path, OnnxError};
+    use crate::{shaped_data::ShapedData, tests::get_model_path, OnnxError, TensorElementDataType};
     use assert_approx_eq::assert_approx_eq;
     use std::convert::TryInto;
 
@@ -331,12 +335,31 @@ mod tests {
 
         assert_eq!(session.inputs.len(), 1);
         assert_eq!(session.inputs[0].name(), "data_0");
-        assert_eq!(session.inputs[0].shape(), &[1, 3, 224, 224]);
+        assert_eq!(session.inputs[0].dimensions(), &[1, 3, 224, 224]);
 
         assert_eq!(session.outputs.len(), 1);
         assert_eq!(session.outputs[0].name(), "softmaxout_1");
         assert!(session.outputs[0].is_a::<f32>());
-        assert_eq!(session.outputs[0].shape(), &[1, 1000, 1, 1]);
+        assert_eq!(session.outputs[0].dimensions(), &[1, 1000, 1, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn can_create_and_dispose_session_with_model_path() -> Result<(), OnnxError>
+    {
+        let model_path = get_model_path("squeezenet.onnx");
+        let session = Session::new(&model_path)?;
+
+        assert_eq!(1, session.inputs.len()); // 1 input node
+        let input = session.input("data_0").unwrap();
+        assert_eq!(TensorElementDataType::ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, input.data_type());
+        assert_eq!(&[1, 3, 224, 224], input.dimensions());
+
+        assert_eq!(1, session.outputs().len()); // 1 output node
+        let output = session.output("softmaxout_1").unwrap();
+        assert_eq!(TensorElementDataType::ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, output.data_type());
+        assert_eq!(&[1, 1000, 1, 1], output.dimensions());
+
         Ok(())
     }
 }
