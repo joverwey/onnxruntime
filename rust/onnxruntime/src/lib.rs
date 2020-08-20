@@ -31,7 +31,7 @@
 //! //We then create a tensor from the data with the given shape and run the model,
 //! //in this case with a single input tensor.
 //!let shaped_data = ShapedData::new(shape, input_tensor_values).unwrap();
-//!let inputs = vec![session.create_tensor_from_shaped_data(shaped_data).unwrap()];
+//!let inputs = vec![("data_0", session.create_tensor_from_shaped_data(shaped_data).unwrap())];
 //!let outputs = session.run(&inputs).unwrap();
 //!
 //! //Finally convert the output tensor into a shaped data representation.
@@ -159,6 +159,9 @@ pub enum OnnxError {
 
     #[error("ONNX Error: {0}")]
     Status(String),
+
+    #[error("The model does not have an input named '{0}'.")]
+    InvalidInput(String),
 
     #[error("{0} was null")]
     NullPointer(&'static str),

@@ -23,7 +23,7 @@ fn run(model_path: &str) -> Result<(), OnnxError> {
 
     let shaped_data = ShapedData::new(shape, input_tensor_values)?;
 
-    let inputs = vec![session.create_tensor_from_shaped_data(shaped_data)?];
+    let inputs = vec![("data_0", session.create_tensor_from_shaped_data(shaped_data)?)];
 
     let now = Instant::now();
     for i in 0..1000 {

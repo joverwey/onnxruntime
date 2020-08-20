@@ -115,15 +115,20 @@ impl Session {
 
     /// Run the model with the given input tensors.
     /// The output tensors are returned.
-    pub fn run(&mut self, inputs: &[Tensor]) -> Result<Vec<Tensor>, OnnxError> {
-        let input_names_c: Vec<*const i8> = self
-            .inputs
-            .iter()
-            .map(|n| n.raw_name as *const i8)
-            .collect();
+    pub fn run(&mut self, inputs: &[(&str, Tensor)]) -> Result<Vec<Tensor>, OnnxError> {
+        let input_names_c: Result<Vec<*const i8>, OnnxError> =
+            inputs
+                .iter()
+                .map(|(name, _)|
+                        self.input(name)
+                            .ok_or(OnnxError::InvalidInput(name.to_string()))
+                            .map(|input| input.raw_name as *const i8))
+                .collect();
+        let input_names_c = input_names_c?;
+
         let input_count = self.inputs.len();
         let input_pointers: Vec<*const OrtValue> =
-            inputs.iter().map(|input| input.value().get_ptr()).collect();
+            inputs.iter().map(|(_, tensor)| tensor.value().get_ptr()).collect();
 
         let output_names_c: Vec<*const i8> = self
             .outputs
@@ -316,7 +321,7 @@ mod tests {
 
         let shaped_data = ShapedData::new(shape, input_tensor_values)?;
 
-        let inputs = vec![session.create_tensor_from_shaped_data(shaped_data)?];
+        let inputs = vec![("data_0", session.create_tensor_from_shaped_data(shaped_data)?)];
 
         let outputs = session.run(&inputs)?;
 
